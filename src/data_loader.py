@@ -1,8 +1,9 @@
-"""Loading and cleaning of the raw Rossmann data.
+"""Read and clean the raw Rossmann files.
 
-The :class:`DataLoader` reads ``train.csv`` and ``store.csv``, fixes the
-known data quirks, merges the store metadata, applies the project cleaning
-rules, and returns one clean Polars DataFrame ready for feature building.
+`DataLoader` reads `train.csv` and `store.csv`. It repairs the known problems
+in the raw data, joins the store facts onto the daily rows, applies the
+cleaning rules of this project, and returns one clean Polars DataFrame. The
+result is ready for feature building.
 """
 
 from __future__ import annotations
@@ -11,8 +12,8 @@ from pathlib import Path
 
 import polars as pl
 
-# Columns whose values are naturally integers. We cast them explicitly so a
-# left join or quoted CSV values cannot leave them as strings or floats.
+# These columns hold whole numbers. We set the type ourselves, because a left
+# join or quoted values in the CSV can turn them into text or into decimals.
 _INT_COLUMNS = [
     "Store",
     "DayOfWeek",
@@ -25,29 +26,31 @@ _INT_COLUMNS = [
 
 
 class DataLoader:
-    """Read, merge and clean the raw Rossmann CSV files.
+    """Read, join and clean the raw Rossmann CSV files.
 
     Parameters
     ----------
     data_dir:
-        Folder that contains ``train.csv`` and ``store.csv``.
+        The folder that holds `train.csv` and `store.csv`.
     """
 
     def __init__(self, data_dir: str | Path = "data") -> None:
         self.data_dir = Path(data_dir)
 
     def load(self, drop_closed: bool = True) -> pl.DataFrame:
-        """Return one clean, merged DataFrame.
+        """Return one clean table with the daily rows and the store facts.
 
-        Steps: read both files, fix the ``StateHoliday`` type mix, merge the
-        store metadata onto every daily row, then apply the cleaning rules.
+        The method reads both files, repairs the type problem in
+        `StateHoliday`, joins the store facts onto every daily row, and then
+        cleans the result.
 
         Parameters
         ----------
         drop_closed:
-            When ``True`` (default) closed days (``Open == 0``) are removed, as
-            the project uses only open trading days for training and metrics.
-            Pass ``False`` to keep them, e.g. to validate the raw data first.
+            If `True` (the default), the closed days (`Open == 0`) are
+            removed. This project trains and measures on open days only.
+            Pass `False` to keep them, for example when you want to check the
+            raw data first.
         """
         train = self._read_train()
         store = self._read_store()
@@ -56,11 +59,11 @@ class DataLoader:
         return df
 
     def _read_train(self) -> pl.DataFrame:
-        """Read ``train.csv`` with dates parsed and StateHoliday as text.
+        """Read `train.csv`, with real dates and `StateHoliday` as text.
 
-        ``StateHoliday`` mixes the integer ``0`` and the string ``'0'`` in the
-        raw file. Forcing the column to ``Utf8`` gives the single clean set of
-        labels ``{'0', 'a', 'b', 'c'}``.
+        In the raw file, `StateHoliday` mixes the number `0` and the text
+        `'0'`. When we read the column as text, we get one clean set of
+        labels: `'0'`, `'a'`, `'b'` and `'c'`.
         """
         path = self.data_dir / "train.csv"
         return pl.read_csv(
@@ -70,17 +73,19 @@ class DataLoader:
         )
 
     def _read_store(self) -> pl.DataFrame:
-        """Read ``store.csv`` (one row of metadata per store)."""
+        """Read `store.csv`. It holds one row of facts per store."""
         path = self.data_dir / "store.csv"
         return pl.read_csv(path)
 
     def _clean(self, df: pl.DataFrame, drop_closed: bool = True) -> pl.DataFrame:
-        """Apply the project cleaning rules.
+        """Apply the cleaning rules of this project.
 
-        - Optionally drop closed days (``Open == 0``); they carry no sales
-          signal and are excluded from both training and evaluation.
-        - Cast the natural integer columns back to ``Int64``.
-        - Sort by store then date so any later time-based logic is stable.
+        - Remove the closed days (`Open == 0`) if the caller asks for it.
+          A closed day tells us nothing about demand, and our metric (RMSPE)
+          divides by the real sales, so rows with zero sales cannot stay.
+        - Give the whole-number columns the type `Int64` again.
+        - Sort by store and then by date, so that any later step that works
+          with time gets the rows in a stable order.
         """
         if drop_closed:
             df = df.filter(pl.col("Open") == 1)

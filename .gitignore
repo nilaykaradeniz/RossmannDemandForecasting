@@ -22,8 +22,5 @@ Thumbs.db
 *.duckdb.wal
 *.duckdb.tmp/
 
-# Working notes - kept local, not part of the published project
-PLAN.md
-
 # Stray Windows/PowerShell caches
 Microsoft/
