@@ -90,6 +90,8 @@ notebooks/
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
+  metrics.py          RMSPE, and a way to split the error by group
+  validation.py       cuts the data by time, in the shape of the real task
 requirements.txt      the Python packages you need
 ```
 
@@ -111,29 +113,52 @@ This split is not only a question of style. It protects us from leakage. Every
 learned value comes from the training period, so nothing from the future can
 enter the features.
 
+`src/validation.py` cuts the data by date. The competition asks for six weeks
+that we cannot see, so our validation windows are six weeks long too. We build
+four of them, one after the other, going back in time. Each window trains on
+every day before it starts. A random split would let the model see days that
+come after the days it predicts, and the score would be far too good.
+
+`src/metrics.py` holds RMSPE and a function that splits the error by any
+column, for example by store type or by month. That breakdown tells us where
+the model is weak.
+
 ## Results so far
 
-| Model | RMSPE | Note |
-|---|---|---|
-| Median sales per store, weekday and promotion | 0.1449 | Simple baseline, measured on the last six weeks of the training data |
+Every model is measured on the four validation windows described above.
 
-A lower number is better. This baseline is simple, but it is already quite
-strong. Any model that we build must beat it clearly. If it does not, the extra
-complexity is not worth it.
+| Window ends | Baseline RMSPE |
+|---|---|
+| 2015-03-27 | 0.1877 |
+| 2015-05-08 | 0.1746 |
+| 2015-06-19 | 0.1584 |
+| 2015-07-31 | 0.1449 |
+| **Average** | **0.1664** |
+
+The baseline is simple. For each store, weekday and promotion state, it
+predicts the median sales of the past. A lower number is better.
+
+Two things are worth noting here. First, this simple rule is already quite
+strong, so any model we build must beat 0.1664 clearly. If it does not, the
+extra complexity is not worth it.
+
+Second, the four windows are not equally hard, and the older ones have a larger
+error. The model has less history in those windows, and some stores were still
+returning from renovation. This is exactly why we use four windows and not one.
+A single window would have reported 0.1449, which is the friendliest of the
+four results.
 
 ## Next steps
 
-1. Build a proper validation setup. The test period is six weeks long, so our
-   validation window must also be six weeks. We move this window back in time
-   several times and take the average score, because one single split can be
-   lucky.
-2. Train a gradient boosting model (XGBoost) on the logarithm of the sales.
+The metric and the validation setup are ready. The next steps are:
+
+1. Train a gradient boosting model (XGBoost) on the logarithm of the sales.
    The logarithm makes the error relative, and this matches RMSPE.
-3. Group the stores that behave in a similar way, and test whether this grouping
+2. Group the stores that behave in a similar way, and test whether this grouping
    helps the model.
-4. Add more features, for example the distance to the next holiday and the
+3. Add more features, for example the distance to the next holiday and the
    length of a promotion period.
-5. Tune the model parameters at the end, when the features are ready.
+4. Tune the model parameters at the end, when the features are ready.
 
 ## How to run
 
