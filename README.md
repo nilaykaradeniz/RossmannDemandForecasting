@@ -87,6 +87,7 @@ number of customers six weeks in advance.
 data/                 the raw CSV files (you download them, they are not shared here)
 notebooks/
   01_eda.ipynb        data checks and exploration
+  02_baseline.ipynb   the metric, the validation windows and the baseline
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -143,10 +144,14 @@ strong, so any model we build must beat 0.1664 clearly. If it does not, the
 extra complexity is not worth it.
 
 Second, the four windows are not equally hard, and the older ones have a larger
-error. The model has less history in those windows, and some stores were still
-returning from renovation. This is exactly why we use four windows and not one.
-A single window would have reported 0.1449, which is the friendliest of the
-four results.
+error. This is exactly why we use four windows and not one. A single window
+would have reported 0.1449, which is the friendliest of the four results.
+
+The notebook `02_baseline.ipynb` tests three reasons for that difference. It is
+not the length of the training history: when every window gets the same
+training data, the trend stays. It is not the renovated stores either, because
+they change the score by 0.0024 at most. What is left is the season. The spring
+windows are simply harder to predict than the summer windows.
 
 ## Next steps
 
