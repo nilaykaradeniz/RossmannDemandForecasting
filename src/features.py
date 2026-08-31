@@ -28,6 +28,15 @@ _MONTH_ABBR = {
     7: "Jul", 8: "Aug", 9: "Sept", 10: "Oct", 11: "Nov", 12: "Dec",
 }
 
+# The same map the other way round. We use it to read the first month of a
+# PromoInterval, which tells us where the promotion cycle of a store starts.
+_MONTH_NUM = {name: number for number, name in _MONTH_ABBR.items()}
+
+# Promo2 repeats every three months, so a month sits at position 0, 1 or 2 of
+# the cycle. Stores outside Promo2 get this value instead, so that the model
+# can keep them apart from the stores that take part.
+_NO_PROMO2_CYCLE = -1
+
 # We treat an opening year below this value as unknown. One store says 1900,
 # which is clearly a placeholder and would give an age of about 115 years.
 _MIN_VALID_COMP_YEAR = 1950
@@ -103,6 +112,14 @@ class FeatureBuilder:
         calendar = ["year", "month", "day", "weekofyear", "DayOfWeek"]
         known = ["Promo", "SchoolHoliday", "promo2_active",
                  "CompetitionDistance", "competition_age_months"]
+        # `promo2_tenure_weeks` and `promo_cycle_pos` are built in _add_promo2
+        # but they are not in this list. In the raw data the sales of a store
+        # rise by about 12 percent from the first year of Promo2 to the sixth,
+        # so we expected them to help. They do not: on the four folds the
+        # difference is 0.0003, which is smaller than the noise, and their
+        # importance in the model is close to zero. The gradient belongs to
+        # the stores that joined early, and the model already knows those
+        # stores through `store_mean_sales`. Notebook 03 shows the test.
         dummies = (
             [f"StoreType_{t}" for t in _STORE_TYPES]
             + [f"Assortment_{a}" for a in _ASSORTMENTS]
@@ -115,7 +132,7 @@ class FeatureBuilder:
         """Add every feature column to `df`: the simple ones and the joins."""
         df = self._add_calendar(df)
         df = self._add_competition(df)
-        df = self._add_promo2_active(df)
+        df = self._add_promo2(df)
         df = self._add_dummies(df)
         df = self._join_learned(df)
         return df
@@ -145,20 +162,61 @@ class FeatureBuilder:
             .alias("competition_age_months"),
         )
 
-    def _add_promo2_active(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Mark whether the repeating promotion Promo2 runs on that date."""
-        month_abbr = pl.col("Date").dt.month().replace_strict(
-            _MONTH_ABBR, return_dtype=pl.Utf8
+    def _add_promo2(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Describe the repeating promotion Promo2 with three columns.
+
+        - `promo2_active` says whether the promotion runs on that date.
+        - `promo2_tenure_weeks` counts the weeks since the store joined. Stores
+          sell more the longer they take part, so the length matters and not
+          only the fact that they joined.
+        - `promo_cycle_pos` says where the month sits in the three month cycle
+          of the store: 0 is the month the cycle starts, then 1 and then 2.
+        """
+        year = pl.col("Date").dt.year()
+        week = pl.col("Date").dt.week()
+        month = pl.col("Date").dt.month()
+        month_abbr = month.replace_strict(_MONTH_ABBR, return_dtype=pl.Utf8)
+
+        started = (year > pl.col("Promo2SinceYear")) | (
+            (year == pl.col("Promo2SinceYear"))
+            & (week >= pl.col("Promo2SinceWeek"))
         )
-        started = (pl.col("Date").dt.year() > pl.col("Promo2SinceYear")) | (
-            (pl.col("Date").dt.year() == pl.col("Promo2SinceYear"))
-            & (pl.col("Date").dt.week() >= pl.col("Promo2SinceWeek"))
-        )
+        # True only for a store that takes part and has already started.
+        running = ((pl.col("Promo2") == 1) & started).fill_null(False)
+
         in_interval = (
             pl.col("PromoInterval").fill_null("").str.split(",").list.contains(month_abbr)
+        ).fill_null(False)
+
+        tenure_weeks = (year - pl.col("Promo2SinceYear")) * 52 + (
+            week - pl.col("Promo2SinceWeek")
         )
-        active = (pl.col("Promo2") == 1) & started & in_interval
-        return df.with_columns(active.fill_null(False).cast(pl.Int8).alias("promo2_active"))
+
+        # The first month named in PromoInterval starts the cycle. We add 12
+        # before the modulo so that the result is never negative.
+        cycle_start = (
+            pl.col("PromoInterval")
+            .str.split(",")
+            .list.first()
+            .replace_strict(_MONTH_NUM, return_dtype=pl.Int32, default=None)
+        )
+        cycle_pos = (month - cycle_start + 12) % 3
+
+        return df.with_columns(
+            (running & in_interval).cast(pl.Int8).alias("promo2_active"),
+            pl.when(running)
+            .then(tenure_weeks)
+            .otherwise(0)
+            .clip(lower_bound=0)
+            .cast(pl.Int32)
+            .alias("promo2_tenure_weeks"),
+            pl.when(running)
+            .then(cycle_pos)
+            .otherwise(_NO_PROMO2_CYCLE)
+            .fill_null(_NO_PROMO2_CYCLE)
+            .cast(pl.Int8)
+            .alias("promo_cycle_pos"),
+        )
 
     def _add_dummies(self, df: pl.DataFrame) -> pl.DataFrame:
         """Turn the fixed category levels into one-hot columns."""

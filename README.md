@@ -88,11 +88,14 @@ data/                 the raw CSV files (you download them, they are not shared 
 notebooks/
   01_eda.ipynb        data checks and exploration
   02_baseline.ipynb   the metric, the validation windows and the baseline
+  03_xgboost.ipynb    the gradient boosting model and what it is worth
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
   metrics.py          RMSPE, and a way to split the error by group
   validation.py       cuts the data by time, in the shape of the real task
+  model.py            XGBoost on the logarithm of the sales
+  experiment.py       runs one approach on every fold and collects the scores
 requirements.txt      the Python packages you need
 ```
 
@@ -124,28 +127,40 @@ come after the days it predicts, and the score would be far too good.
 column, for example by store type or by month. That breakdown tells us where
 the model is weak.
 
+`src/model.py` trains XGBoost on the logarithm of the sales, and turns the
+prediction back at the end. It also chooses the number of trees on a small
+inner window taken from the end of the training data, so that the validation
+window stays untouched.
+
+`src/experiment.py` runs one approach on all four windows and collects the
+scores. It asks for a function that trains on the rows of a single fold, which
+keeps the fitting inside the fold where it belongs.
+
 ## Results so far
 
 Every model is measured on the four validation windows described above.
 
-| Window ends | Baseline RMSPE |
-|---|---|
-| 2015-03-27 | 0.1877 |
-| 2015-05-08 | 0.1746 |
-| 2015-06-19 | 0.1584 |
-| 2015-07-31 | 0.1449 |
-| **Average** | **0.1664** |
+| Window ends | Baseline | XGBoost |
+|---|---|---|
+| 2015-03-27 | 0.1877 | 0.1806 |
+| 2015-05-08 | 0.1746 | 0.1464 |
+| 2015-06-19 | 0.1584 | 0.1305 |
+| 2015-07-31 | 0.1449 | 0.1315 |
+| **Average** | **0.1664** | **0.1472** |
 
-The baseline is simple. For each store, weekday and promotion state, it
-predicts the median sales of the past. A lower number is better.
+A lower number is better. The baseline is simple: for each store, weekday and
+promotion state, it predicts the median sales of the past. XGBoost is about
+twelve percent better, and it wins on every window, which was our rule for
+accepting a model.
 
-Two things are worth noting here. First, this simple rule is already quite
-strong, so any model we build must beat 0.1664 clearly. If it does not, the
-extra complexity is not worth it.
+The single most valuable decision was to train on the logarithm of the sales.
+That alone is worth 0.008. Without it the model scores 0.1552, and on the
+hardest window it even loses to the baseline.
 
-Second, the four windows are not equally hard, and the older ones have a larger
-error. This is exactly why we use four windows and not one. A single window
-would have reported 0.1449, which is the friendliest of the four results.
+The four windows are not equally hard, and the older ones have a larger error.
+This is exactly why we use four windows and not one. For the baseline, a single
+window would have reported 0.1449, which is the friendliest of the four
+results.
 
 The notebook `02_baseline.ipynb` tests three reasons for that difference. It is
 not the length of the training history: when every window gets the same
@@ -155,15 +170,19 @@ windows are simply harder to predict than the summer windows.
 
 ## Next steps
 
-The metric and the validation setup are ready. The next steps are:
+The metric, the validation setup and a working model are ready. The next steps
+are:
 
-1. Train a gradient boosting model (XGBoost) on the logarithm of the sales.
-   The logarithm makes the error relative, and this matches RMSPE.
-2. Group the stores that behave in a similar way, and test whether this grouping
+1. Group the stores that behave in a similar way, and test whether this grouping
    helps the model.
-3. Add more features, for example the distance to the next holiday and the
+2. Add more features, for example the distance to the next holiday and the
    length of a promotion period.
-4. Tune the model parameters at the end, when the features are ready.
+3. Tune the model parameters at the end, when the features are ready.
+
+One result already shapes this list. We found a clear pattern in the raw data,
+built two features for it, and measured no gain at all: the model knew it
+already through the store averages. Every new idea now has to prove itself on
+the four windows before it stays.
 
 ## How to run
 
