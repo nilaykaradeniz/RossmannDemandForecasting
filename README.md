@@ -89,6 +89,7 @@ notebooks/
   01_eda.ipynb        data checks and exploration
   02_baseline.ipynb   the metric, the validation windows and the baseline
   03_xgboost.ipynb    the gradient boosting model and what it is worth
+  04_segmentation.ipynb  grouping the stores, and one model per group
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -96,6 +97,7 @@ src/
   validation.py       cuts the data by time, in the shape of the real task
   model.py            XGBoost on the logarithm of the sales
   experiment.py       runs one approach on every fold and collects the scores
+  segments.py         groups the stores by the way they react
 requirements.txt      the Python packages you need
 ```
 
@@ -136,26 +138,41 @@ window stays untouched.
 scores. It asks for a function that trains on the rows of a single fold, which
 keeps the fitting inside the fold where it belongs.
 
+`src/segments.py` puts every store into one of four groups. It describes a
+store by ratios, such as how much a promotion helps it, so that the groups
+follow the behaviour of a store and not its size.
+
 ## Results so far
 
 Every model is measured on the four validation windows described above.
 
-| Window ends | Baseline | XGBoost |
-|---|---|---|
-| 2015-03-27 | 0.1877 | 0.1806 |
-| 2015-05-08 | 0.1746 | 0.1464 |
-| 2015-06-19 | 0.1584 | 0.1305 |
-| 2015-07-31 | 0.1449 | 0.1315 |
-| **Average** | **0.1664** | **0.1472** |
+| Window ends | Baseline | XGBoost | XGBoost per segment |
+|---|---|---|---|
+| 2015-03-27 | 0.1877 | 0.1795 | 0.1759 |
+| 2015-05-08 | 0.1746 | 0.1523 | 0.1441 |
+| 2015-06-19 | 0.1584 | 0.1305 | 0.1260 |
+| 2015-07-31 | 0.1449 | 0.1364 | 0.1345 |
+| **Average** | **0.1664** | **0.1497** | **0.1451** |
 
 A lower number is better. The baseline is simple: for each store, weekday and
-promotion state, it predicts the median sales of the past. XGBoost is about
-twelve percent better, and it wins on every window, which was our rule for
-accepting a model.
+promotion state, it predicts the median sales of the past.
 
-The single most valuable decision was to train on the logarithm of the sales.
-That alone is worth 0.008. Without it the model scores 0.1552, and on the
-hardest window it even loses to the baseline.
+The two XGBoost columns are the average of three random seeds. The model draws
+80 percent of the columns for each tree, so a single run moves by a few
+thousandths and one seed alone can flatter a result. Both models win on every
+window, which was our rule for accepting a model.
+
+Two decisions did the work.
+
+**Training on the logarithm of the sales** is worth about 0.008. RMSPE reads
+every error as a percentage, and the logarithm makes the training goal read
+them the same way. Without it the model even loses to the baseline on the
+hardest window.
+
+**One model per store group** is worth another 0.005. Four models, one for each
+behaviour group, beat a single model on every window. Handing the group to a
+single model as a feature does almost nothing, so the grouping has to change
+the shape of the model, not only the list of features.
 
 The four windows are not equally hard, and the older ones have a larger error.
 This is exactly why we use four windows and not one. For the baseline, a single
@@ -170,19 +187,22 @@ windows are simply harder to predict than the summer windows.
 
 ## Next steps
 
-The metric, the validation setup and a working model are ready. The next steps
-are:
+The metric, the validation setup, a working model and the store groups are
+ready. The next steps are:
 
-1. Group the stores that behave in a similar way, and test whether this grouping
-   helps the model.
-2. Add more features, for example the distance to the next holiday and the
-   length of a promotion period.
+1. Look at the errors of the segmented model group by group, and let the weak
+   spots choose the next features.
+2. Add those features, for example the days to the next holiday and the length
+   of a promotion period.
 3. Tune the model parameters at the end, when the features are ready.
+4. Correct the small bias that the logarithm leaves behind, first for all
+   stores and then for each group.
 
-One result already shapes this list. We found a clear pattern in the raw data,
-built two features for it, and measured no gain at all: the model knew it
-already through the store averages. Every new idea now has to prove itself on
-the four windows before it stays.
+Two results shape this list. We found a clear pattern in the raw data, built two
+features for it, and measured no gain at all: the model knew it already through
+the store averages. And we expected a single model to beat four smaller ones,
+and it did not. Every idea now has to prove itself on the four windows, with
+more than one seed, before it stays.
 
 ## How to run
 
