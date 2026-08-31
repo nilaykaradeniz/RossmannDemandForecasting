@@ -1,0 +1,8 @@
+# Scientific Python stack for this project.
+# Versions left open so a fresh install picks compatible builds.
+polars
+numpy
+scikit-learn
+xgboost
+matplotlib
+jupyter
