@@ -91,6 +91,7 @@ notebooks/
   03_xgboost.ipynb    the gradient boosting model and what it is worth
   04_segmentation.ipynb  grouping the stores, and one model per group
   05_error_analysis.ipynb  where the model fails, and what to build next
+  06_features.ipynb   the closed days and Easter enter the model
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -120,6 +121,12 @@ This split is not only a question of style. It protects us from leakage. Every
 learned value comes from the training period, so nothing from the future can
 enter the features.
 
+The builder can also take a calendar with the closed days kept. From it it
+builds the closed-day columns, such as `open_tomorrow` and the distance to the
+closest state holiday. This is reference data, not something we learn: the
+company plans its opening days in advance, and the competition provides them
+for the test period too.
+
 `src/validation.py` cuts the data by date. The competition asks for six weeks
 that we cannot see, so our validation windows are six weeks long too. We build
 four of them, one after the other, going back in time. Each window trains on
@@ -147,23 +154,23 @@ follow the behaviour of a store and not its size.
 
 Every model is measured on the four validation windows described above.
 
-| Window ends | Baseline | XGBoost | XGBoost per segment |
-|---|---|---|---|
-| 2015-03-27 | 0.1877 | 0.1795 | 0.1759 |
-| 2015-05-08 | 0.1746 | 0.1523 | 0.1441 |
-| 2015-06-19 | 0.1584 | 0.1305 | 0.1260 |
-| 2015-07-31 | 0.1449 | 0.1364 | 0.1345 |
-| **Average** | **0.1664** | **0.1497** | **0.1451** |
+| Window ends | Baseline | XGBoost | Per segment | + closed days and Easter |
+|---|---|---|---|---|
+| 2015-03-27 | 0.1877 | 0.1795 | 0.1759 | 0.1657 |
+| 2015-05-08 | 0.1746 | 0.1523 | 0.1441 | 0.0998 |
+| 2015-06-19 | 0.1584 | 0.1305 | 0.1260 | 0.0999 |
+| 2015-07-31 | 0.1449 | 0.1364 | 0.1345 | 0.1102 |
+| **Average** | **0.1664** | **0.1497** | **0.1451** | **0.1189** |
 
 A lower number is better. The baseline is simple: for each store, weekday and
 promotion state, it predicts the median sales of the past.
 
-The two XGBoost columns are the average of three random seeds. The model draws
+The XGBoost columns are the average of three random seeds. The model draws
 80 percent of the columns for each tree, so a single run moves by a few
-thousandths and one seed alone can flatter a result. Both models win on every
-window, which was our rule for accepting a model.
+thousandths and one seed alone can flatter a result. Every model wins on every
+window, which is our rule for accepting a change.
 
-Two decisions did the work.
+Three decisions did the work.
 
 **Training on the logarithm of the sales** is worth about 0.008. RMSPE reads
 every error as a percentage, and the logarithm makes the training goal read
@@ -174,6 +181,15 @@ hardest window.
 behaviour group, beat a single model on every window. Handing the group to a
 single model as a feature does almost nothing, so the grouping has to change
 the shape of the model, not only the list of features.
+
+**Showing the model the closed days around each date** is worth 0.024, the
+largest single gain of the project, and the error analysis found it. Six small
+columns say whether the shop was open yesterday, whether it will be open
+tomorrow, and how far the closest state holiday is. All of them are known six
+weeks in advance. One more small feature, the distance to Easter, adds 0.002
+on top - almost all of it on the carnival and Easter windows, which is exactly
+what it was built for. Notebook `06_features.ipynb` shows the test, and also a
+check that the gain lands on the closure days and not somewhere surprising.
 
 The four windows are not equally hard, and the older ones have a larger error.
 This is exactly why we use four windows and not one. For the baseline, a single
@@ -232,15 +248,13 @@ one effect three times.
 
 ## Next steps
 
-The metric, the validation setup, a working model, the store groups and the
-error analysis are ready. The next steps are:
+The metric, the validation setup, the store groups, the error analysis and the
+two feature families it asked for first are ready. The next steps are:
 
-1. Build the features that the error analysis asked for, starting with the
-   closed days around each row and then the distance to Easter.
-2. Add the days since a renovated store came back, and a better day-of-month
-   feature.
-3. Tune the model parameters at the end, when the features are ready.
-4. Correct the small bias that the logarithm leaves behind. It is about 1.3
+1. Add the days since a renovated store came back, and a better day-of-month
+   feature - the remaining items of the error analysis list.
+2. Tune the model parameters, now against a much stronger model.
+3. Correct the small bias that the logarithm leaves behind. It is about 1.3
    percent and it is the same in every group, so one correction for all stores
    should be enough.
 

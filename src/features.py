@@ -12,6 +12,9 @@ features.
 
 from __future__ import annotations
 
+from datetime import date
+
+import numpy as np
 import polars as pl
 
 # Fixed category levels, checked against the data. When we write them down
@@ -41,6 +44,178 @@ _NO_PROMO2_CYCLE = -1
 # which is clearly a placeholder and would give an age of about 115 years.
 _MIN_VALID_COMP_YEAR = 1950
 
+# How far we look for the closest state holiday. Notebook 05 showed the effect
+# is short: one day before a holiday the error is 0.208, two days before it is
+# already 0.129. Anything further away is the same thing to the model, so we
+# stop counting and use this value.
+_HOLIDAY_HORIZON = 10
+
+# The window we use to count the closed days before and after a day. One week
+# holds the normal Sunday, so a value above the usual one means an extra
+# closure is near.
+_CLOSURE_WINDOW = 7
+
+# Used when a day sits at the edge of the calendar and the answer is unknown.
+_UNKNOWN = -1
+
+# How far from Easter we still count the days. Outside this window every day
+# gets the same value, because the feasts we care about all sit inside it:
+# Rosenmontag is 48 days before Easter and Whit Monday is 50 days after.
+_EASTER_WINDOW = 60
+
+# The column that `with_easter=True` adds.
+EASTER_COLUMNS = ["days_to_easter"]
+
+# The columns that `build_closure_calendar` produces. They are features only
+# when a calendar is given to `FeatureBuilder`.
+CLOSURE_COLUMNS = [
+    "open_yesterday",
+    "open_tomorrow",
+    "closed_days_next_7",
+    "closed_days_last_7",
+    "days_to_next_holiday",
+    "days_since_last_holiday",
+]
+
+
+def easter_sunday(year: int) -> date:
+    """Return the date of Easter Sunday, with the usual Gregorian rule.
+
+    Easter moves. It fell on the 31st of March in 2013, the 20th of April in
+    2014 and the 5th of April in 2015, so a swing of three weeks. Several
+    German feasts hang on it: Rosenmontag is 48 days before, Good Friday two
+    days before, Whit Monday 50 days after.
+
+    Our model reads a date as a month, a day and a week number, so it cannot
+    line those feasts up between the years. Notebook 05 measured what that
+    costs: the carnival week scores 0.335 and the week before Easter 0.213,
+    against 0.09 to 0.15 for a normal week.
+    """
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    ll = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * ll) // 451
+    month, day = divmod(h + ll - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
+def build_closure_calendar(calendar: pl.DataFrame) -> pl.DataFrame:
+    """Describe, for every store and day, the closed days that sit around it.
+
+    This is the feature family that notebook 05 asked for. Our model data holds
+    open days only, so the model can see that today is a holiday but not that
+    tomorrow is one. The days that carry the demand of a closed day are exactly
+    the days we predict worst: a day after a closed day scores 0.187 and a day
+    before one 0.171, against 0.123 for a normal day.
+
+    Nothing here is learned from the sales. A shop plans its opening days and
+    the state publishes its holidays long in advance, so every column below is
+    known six weeks ahead, which is what our task allows.
+
+    Parameters
+    ----------
+    calendar:
+        The daily table **with the closed days kept**, so
+        `DataLoader.load(drop_closed=False)`. It needs `Store`, `Date`, `Open`
+        and `StateHoliday`.
+
+    Returns
+    -------
+    pl.DataFrame
+        One row per store and day, with `Store`, `Date` and the columns in
+        `CLOSURE_COLUMNS`.
+
+    Notes
+    -----
+    A day that has no row at all counts as closed. That is what a missing row
+    means here: the shop was not trading, which is the case for the 180 stores
+    that were away for a renovation in 2014.
+
+    The last day of the calendar has no tomorrow, so `open_tomorrow` and
+    `closed_days_next_7` are `-1` there. In the real task the same happens on
+    the last day of the forecast period, which is one day out of 42.
+    """
+    needed = {"Store", "Date", "Open", "StateHoliday"}
+    missing = needed - set(calendar.columns)
+    if missing:
+        raise ValueError(f"The calendar has no column(s): {sorted(missing)}")
+
+    first_day = calendar["Date"].min()
+    last_day = calendar["Date"].max()
+    n_days = (last_day - first_day).days + 1
+
+    rows = []
+    for key, part in calendar.sort("Date").group_by("Store", maintain_order=True):
+        store = key[0] if isinstance(key, tuple) else key
+        index = np.array([(d - first_day).days for d in part["Date"].to_list()])
+
+        # A full day-by-day axis for this store. Everything we did not see is
+        # a day the shop was not trading.
+        is_open = np.zeros(n_days, dtype=bool)
+        is_open[index] = part["Open"].to_numpy() == 1
+        is_holiday = np.zeros(n_days, dtype=bool)
+        is_holiday[index] = part["StateHoliday"].to_numpy() != "0"
+
+        rows.append(
+            pl.DataFrame({
+                "Store": np.full(len(index), store, dtype=np.int64),
+                "Date": part["Date"],
+                **{name: values[index] for name, values in
+                   _closure_columns(is_open, is_holiday, n_days).items()},
+            })
+        )
+
+    return pl.concat(rows).sort(["Store", "Date"])
+
+
+def _closure_columns(is_open: np.ndarray, is_holiday: np.ndarray,
+                     n_days: int) -> dict[str, np.ndarray]:
+    """Build the six columns on one store's day-by-day axis."""
+    open_yesterday = np.full(n_days, _UNKNOWN, dtype=np.int64)
+    open_yesterday[1:] = is_open[:-1]
+    open_tomorrow = np.full(n_days, _UNKNOWN, dtype=np.int64)
+    open_tomorrow[:-1] = is_open[1:]
+
+    # How many of the next seven days is the shop closed, and how many of the
+    # last seven? A running sum makes this one subtraction per day.
+    closed = (~is_open).astype(np.int64)
+    total = np.concatenate([[0], np.cumsum(closed)])
+
+    closed_next = np.full(n_days, _UNKNOWN, dtype=np.int64)
+    closed_last = np.full(n_days, _UNKNOWN, dtype=np.int64)
+    for i in range(n_days):
+        if i + _CLOSURE_WINDOW < n_days:
+            closed_next[i] = total[i + 1 + _CLOSURE_WINDOW] - total[i + 1]
+        if i - _CLOSURE_WINDOW >= 0:
+            closed_last[i] = total[i] - total[i - _CLOSURE_WINDOW]
+
+    holidays = np.flatnonzero(is_holiday)
+    to_next = np.full(n_days, _HOLIDAY_HORIZON, dtype=np.int64)
+    since_last = np.full(n_days, _HOLIDAY_HORIZON, dtype=np.int64)
+    if holidays.size:
+        days = np.arange(n_days)
+        after = np.searchsorted(holidays, days, side="left")
+        has_after = after < holidays.size
+        to_next[has_after] = holidays[after[has_after]] - days[has_after]
+
+        before = np.searchsorted(holidays, days, side="right") - 1
+        has_before = before >= 0
+        since_last[has_before] = days[has_before] - holidays[before[has_before]]
+
+    return {
+        "open_yesterday": open_yesterday,
+        "open_tomorrow": open_tomorrow,
+        "closed_days_next_7": closed_next,
+        "closed_days_last_7": closed_last,
+        "days_to_next_holiday": np.minimum(to_next, _HOLIDAY_HORIZON),
+        "days_since_last_holiday": np.minimum(since_last, _HOLIDAY_HORIZON),
+    }
+
 
 class FeatureBuilder:
     """Build the feature matrix, and learn the store statistics from train only.
@@ -52,8 +227,41 @@ class FeatureBuilder:
     from different angles.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, calendar: pl.DataFrame | None = None,
+                 with_easter: bool = False) -> None:
+        """Set the builder up, with or without the closed-day family.
+
+        Parameters
+        ----------
+        calendar:
+            The daily table with the closed days kept, from
+            `DataLoader.load(drop_closed=False)`. When it is given, the six
+            columns of `CLOSURE_COLUMNS` join the feature list. When it is
+            left out, the builder works exactly as it did before, so the
+            earlier notebooks still produce the numbers they report.
+
+            The calendar is reference data and not something we learn. It says
+            which days a shop plans to open and when the state holidays are,
+            and both are known long before the day itself.
+
+            You may also pass a table that `build_closure_calendar` has
+            already produced. The builder then uses it as it is. This saves
+            time when many builders are fitted in a row, for example one per
+            fold, because the calendar is the same every time.
+        with_easter:
+            Add `days_to_easter`, the signed number of days between the row
+            and Easter Sunday of that year. Off by default, for the same
+            reason as the calendar: the earlier notebooks must keep producing
+            the numbers they report.
+        """
         self.feature_names_: list[str] = []
+        self.with_easter = with_easter
+        if calendar is None:
+            self._closure_ = None
+        elif set(CLOSURE_COLUMNS).issubset(calendar.columns):
+            self._closure_ = calendar
+        else:
+            self._closure_ = build_closure_calendar(calendar)
 
     # ------------------------------------------------------------------ fit
     def fit(self, train: pl.DataFrame) -> "FeatureBuilder":
@@ -126,7 +334,9 @@ class FeatureBuilder:
             + [f"StateHoliday_{h}" for h in _STATE_HOLIDAYS]
         )
         learned = ["store_mean_sales", "store_dow_mean_sales", "store_promo_uplift"]
-        return calendar + known + dummies + learned
+        closure = list(CLOSURE_COLUMNS) if self._closure_ is not None else []
+        easter = list(EASTER_COLUMNS) if self.with_easter else []
+        return calendar + known + dummies + learned + closure + easter
 
     def _build(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add every feature column to `df`: the simple ones and the joins."""
@@ -135,7 +345,39 @@ class FeatureBuilder:
         df = self._add_promo2(df)
         df = self._add_dummies(df)
         df = self._join_learned(df)
+        df = self._join_closure(df)
+        df = self._add_easter(df)
         return df
+
+    def _add_easter(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Add the signed distance in days between the row and Easter Sunday.
+
+        A negative value means the day comes before Easter. Days far away from
+        Easter are all cut to the same value, so that the model does not read
+        the distance as a second calendar.
+        """
+        if not self.with_easter:
+            return df
+        years = df["Date"].dt.year().unique().to_list()
+        easter = {year: easter_sunday(year) for year in years}
+        distance = [(d - easter[d.year]).days for d in df["Date"].to_list()]
+        return df.with_columns(
+            pl.Series("days_to_easter", distance, dtype=pl.Int32)
+            .clip(-_EASTER_WINDOW, _EASTER_WINDOW)
+        )
+
+    def _join_closure(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Join the closed-day family, when a calendar was given."""
+        if self._closure_ is None:
+            return df
+        joined = df.join(self._closure_, on=["Store", "Date"], how="left")
+        empty = joined.select(pl.col(CLOSURE_COLUMNS[0]).is_null().sum()).item()
+        if empty:
+            raise ValueError(
+                f"{empty} rows are not in the calendar. Please pass a calendar "
+                "that covers every day you want to predict."
+            )
+        return joined
 
     def _add_calendar(self, df: pl.DataFrame) -> pl.DataFrame:
         return df.with_columns(
