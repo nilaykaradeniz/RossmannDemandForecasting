@@ -90,6 +90,7 @@ notebooks/
   02_baseline.ipynb   the metric, the validation windows and the baseline
   03_xgboost.ipynb    the gradient boosting model and what it is worth
   04_segmentation.ipynb  grouping the stores, and one model per group
+  05_error_analysis.ipynb  where the model fails, and what to build next
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -185,18 +186,68 @@ training data, the trend stays. It is not the renovated stores either, because
 they change the score by 0.0024 at most. What is left is the season. The spring
 windows are simply harder to predict than the summer windows.
 
+## Where the model fails
+
+The notebook `05_error_analysis.ipynb` runs the segmented model again, keeps
+every scored row, and asks where the error sits. It also trains the global model
+on the same rows, so every table can show whether the split helped that group.
+
+**The error is in the days, not in the stores.** This is the main result, and it
+was not what we expected. The worst 10 percent of the stores carry 33 percent of
+the error, which is not much more than their share. But there are only 168
+validation days, and the **worst ten of them carry 36.4 percent of the error**. A
+store with a large error in one window is mostly fine in the next one: the
+correlation between the windows is only +0.08 to +0.31.
+
+**Two days explain the hardest window.** The 16th and 17th of February 2015 are
+5.5 percent of the rows of that window and carry 47 percent of its error.
+Without them the window scores 0.1312 instead of 0.1759, which would make it the
+second easiest of the four. Those are the German carnival days. Notebook 02 had
+called the difference between the windows "the season", and that answer is now
+replaced by a better one.
+
+**The model cannot see the closed days around it.** A day that follows a closed
+day scores 0.187, and a day before one scores 0.171, against 0.123 for a normal
+day. Together they are 38 percent of the rows. The reason is simple: closed days
+are removed from our data, so the model knows that today is a holiday but not
+that tomorrow is one. The days around Easter, Ascension Day and Whit Monday are
+all predicted 17 to 28 percent too low, because people buy before the shop
+closes.
+
+**Easter moves, and the model cannot follow it.** Carnival is always 48 days
+before Easter, so it fell on the 11th of February in 2013, the 3rd of March in
+2014 and the 16th of February in 2015. The model reads a date as a month, a day
+and a week number, so it cannot line those years up. The carnival week scores
+0.335 and the week before Easter 0.213, against 0.09 to 0.15 for a normal week.
+
+**One more small but clear group.** A month after a renovated store comes back,
+the error is still 0.265. Thirty days later it is 0.127. The problem is narrow
+and it ends by itself.
+
+The notebook also warns against a mistake that was easy to make. Monday, "the
+day after a closed day" and "the first day of a promotion" all look like strong
+findings on their own, but they are almost the same rows: 23,829 of the 24,543
+Monday rows follow a closed Sunday. Counting them as three features would count
+one effect three times.
+
 ## Next steps
 
-The metric, the validation setup, a working model and the store groups are
-ready. The next steps are:
+The metric, the validation setup, a working model, the store groups and the
+error analysis are ready. The next steps are:
 
-1. Look at the errors of the segmented model group by group, and let the weak
-   spots choose the next features.
-2. Add those features, for example the days to the next holiday and the length
-   of a promotion period.
+1. Build the features that the error analysis asked for, starting with the
+   closed days around each row and then the distance to Easter.
+2. Add the days since a renovated store came back, and a better day-of-month
+   feature.
 3. Tune the model parameters at the end, when the features are ready.
-4. Correct the small bias that the logarithm leaves behind, first for all
-   stores and then for each group.
+4. Correct the small bias that the logarithm leaves behind. It is about 1.3
+   percent and it is the same in every group, so one correction for all stores
+   should be enough.
+
+Every one of these has to prove itself the same way as everything before it:
+four windows, three seeds, and a win on every window. Notebook 03 is the
+reminder. A pattern can be very clear in the data and still give the model
+nothing.
 
 Two results shape this list. We found a clear pattern in the raw data, built two
 features for it, and measured no gain at all: the model knew it already through
