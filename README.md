@@ -93,6 +93,7 @@ notebooks/
   05_error_analysis.ipynb  where the model fails, and what to build next
   06_features.ipynb   the closed days and Easter enter the model
   07_reopening_and_month.ipynb  the last two ideas of the list, tested and rejected
+  08_tuning_and_calibration.ipynb  the settings of the model, and the correction for the logarithm
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -287,22 +288,41 @@ with three seeds, which is how we know the seed noise. This cuts the training
 time of a notebook by more than half, and the bar for accepting a change stays
 where it was.
 
-## Next steps
+## Tuning and calibration, done last
 
-The metric, the validation setup, the store groups, the error analysis and
-every feature family it asked for are ready. Two steps remain:
+The notebook `08_tuning_and_calibration.ipynb` does the two steps that
+usually come first. We did them last on purpose. Done early, tuning makes
+every later experiment slower, and the settings are tuned for a model that no
+longer exists once the features change.
 
-1. Tune the model parameters, now against a much stronger model.
-2. Correct the small bias that the logarithm leaves behind. It is about 1.3
-   percent and it is the same in every group, so one correction for all stores
-   should be enough.
+**The settings had nothing to add.** Eight settings were ranked on the inner
+six weeks of the newest window, with one seed, in about seven minutes. The
+settings we had used since notebook 03 won: 0.1021 against 0.1033 for the
+closest challenger, which takes two and a half times as long. Every setting
+with a learning rate of 0.1 was at least 0.003 behind, so the faster rate of
+notebook 07 stays a speed trick and not a model choice. The confirmation run
+also taught us that the patience of the early stopping is a setting in its
+own right: with 30 rounds instead of 50 the score was 0.002 worse on two
+windows. The model keeps the settings that were measured properly.
 
-Both have to prove themselves the same way as everything before them: four
-windows, a win on every window, and three seeds before anything is accepted.
-Notebook 03 is the reminder. A pattern can be very clear in the data and still
-give the model nothing.
+**The correction for the logarithm is rejected.** The model learns the
+logarithm of the sales, and undoing it leaves the predictions a little low.
+One multiplier, learned on the six weeks before each window, should fix
+that. It does not: the score gets worse by 0.0007. The reason is that the
+bias moves. On the oldest window the model over-predicts by three percent,
+on the later ones it under-predicts by one, and the next six weeks want a
+different factor than the six weeks before them. Even the best possible
+factor, learned on the scored rows themselves, would gain only 0.0012.
 
-Two results shape this list. We found a clear pattern in the raw data, built two
+That closes the modelling. The final model is the one from notebook 06: one
+XGBoost per store group, trained on the logarithm of the sales, with the
+closed-day columns and the distance to Easter. It scores 0.1189 on the four
+windows, 29 percent below the baseline. Every gain came from the data and the
+features, and none from the knobs.
+
+## What shaped the work
+
+Two results shape how every idea was tested. We found a clear pattern in the raw data, built two
 features for it, and measured no gain at all: the model knew it already through
 the store averages. And we expected a single model to beat four smaller ones,
 and it did not. Every idea now has to prove itself on the four windows, with

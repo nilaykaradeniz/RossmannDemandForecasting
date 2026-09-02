@@ -64,6 +64,17 @@ class SalesModel:
         Use this number of trees and skip the inner window. The count barely
         moves with the seed, so when only the seed changes we can take the
         `best_rounds_` of the first fit and save the inner fit.
+    refit:
+        After the inner window has counted the trees, train again on the
+        whole training set. This is the normal path. Set it to `False` only
+        to rank settings quickly: the model of the inner window is kept, and
+        `predict` uses it. Its score on the inner window is then a little
+        friendly, because the same rows stop the training and score it.
+
+    After a fit that used the inner window, `inner_scored_` holds the rows of
+    that window with a `prediction` column. Those predictions come from a
+    model that has not seen the rows, which makes them useful for learning a
+    correction without touching the validation window.
     """
 
     def __init__(
@@ -74,6 +85,7 @@ class SalesModel:
         inner_valid_days: int = INNER_VALID_DAYS,
         log_target: bool = True,
         fixed_rounds: int | None = None,
+        refit: bool = True,
     ) -> None:
         self.params = dict(DEFAULT_PARAMS if params is None else params)
         self.num_boost_round = num_boost_round
@@ -81,6 +93,8 @@ class SalesModel:
         self.inner_valid_days = inner_valid_days
         self.log_target = log_target
         self.fixed_rounds = fixed_rounds
+        self.refit = refit
+        self.inner_scored_: pl.DataFrame | None = None
         self.booster_: xgb.Booster | None = None
         self.feature_names_: list[str] = []
         self.best_rounds_: int | None = None
@@ -129,6 +143,13 @@ class SalesModel:
                 verbose_eval=False,
             )
             self.best_rounds_ = watch.best_iteration + 1
+            raw = watch.predict(self._matrix(inner_valid),
+                                iteration_range=(0, self.best_rounds_))
+            self.inner_scored_ = inner_valid.with_columns(
+                pl.Series("prediction", self._back(raw)))
+            if not self.refit:
+                self.booster_ = watch
+                return self
 
         # Step two: train the real model on everything, with that count.
         self.booster_ = xgb.train(
@@ -147,7 +168,12 @@ class SalesModel:
         """
         if self.booster_ is None:
             raise RuntimeError("SalesModel must be fitted before predict().")
-        raw = self.booster_.predict(self._matrix(df))
+        raw = self.booster_.predict(self._matrix(df),
+                                    iteration_range=(0, self.best_rounds_))
+        return self._back(raw)
+
+    def _back(self, raw: np.ndarray) -> np.ndarray:
+        """Turn raw model output into sales: undo the logarithm, cut at zero."""
         pred = np.expm1(raw) if self.log_target else raw
         return np.clip(pred, 0, None)
 
