@@ -3,41 +3,41 @@
 ![tests](https://github.com/nilaykaradeniz/RossmannDemandForecasting/actions/workflows/tests.yml/badge.svg)
 
 Rossmann is a large drugstore chain in Germany. This project predicts how much
-each of its 1,115 stores will sell on each day, six weeks into the future.
-
-The company needs this forecast to plan its work. When a store knows its future
-sales, it can order the right amount of stock. It can also decide how many
-people should work on each day.
+each of its 1,115 stores will sell on each day, six weeks into the future, so
+that a store can order the right stock and plan its staff.
 
 ## In short
 
 - **The final model scores 0.1189 RMSPE** on four time-ordered validation
   windows. A strong baseline scores 0.1664, so the model is 29 percent better.
+  For a typical store that is a median miss of about 400 units on a day of
+  6,400, with no lean to either side.
 - **The error analysis did the work.** The largest single gain, 0.024, came
   from six small columns about closed days. We built them because a notebook
   showed where the model was failing, not because we guessed.
 - **Every change had to prove itself** on four windows, with three random
-  seeds, and win on every window. Ideas that did not pass were kept in the
-  notebooks with their numbers, so the failures are part of the record.
-- **Tuning and calibration came last, and added nothing.** The settings we
-  started with won the search, and the standard correction for the logarithm
-  made the score worse. Every gain came from the data and the features.
-- **No leakage.** The model uses only what the company knows six weeks ahead:
-  the date, the store, the planned promotions and the planned opening days.
-- **The model ships.** The final model is trained once, saved with a model
-  card, and used from a file to forecast the test period and to score single
-  new rows. A check shows that the saved file gives the same score as the
-  notebooks.
+  seeds, and win on every window. Ideas that did not pass stay in the
+  notebooks with their numbers.
+- **Tuning and calibration came last, and added nothing.** Every gain came
+  from the data and the features.
+- **No leakage, shown and not only claimed.** Every feature is listed with
+  the place it comes from, and the one column that would leak is added once
+  to show what a leak looks like.
+- **The model ships.** It is trained once, saved with a model card, and used
+  from a file to forecast the test period, with an interval, and to score
+  single new rows. It refuses a row that comes without its opening plan.
+- **The open questions were asked and answered.** A senior review of this
+  repository produced a list of questions; notebook 10 measures each one.
 
 ## The problem
 
 We predict daily sales for each store, six weeks into the future.
 
-Six weeks is a long time, and this changes what we are allowed to use. For
-example, we do not know how many customers will come to the store in six weeks.
-So we cannot use that number, even though it is in the data. We only use
-information that we already know today: the date, the store, and the promotions
-and opening days that the company has planned.
+Six weeks is a long time, and this changes what we are allowed to use. We do
+not know how many customers will come to the store in six weeks, so we cannot
+use that number, even though it is in the data. We only use what the company
+already knows today: the date, the store, and the promotions and opening days
+it has planned.
 
 ## The data
 
@@ -55,55 +55,30 @@ to share them. Please download them yourself. The steps are in the last section.
 
 ## How we measure the error
 
-We use RMSPE (Root Mean Square Percentage Error).
+We use RMSPE (Root Mean Square Percentage Error). It works with percentages,
+so an error of 500 units is large for a small store and small for a big one,
+and the metric sees both in a fair way.
 
-This metric works with percentages, not with absolute numbers. An error of 500
-units is small for a big store, but it is large for a small store. RMSPE looks
-at both stores in a fair way.
-
-This has two practical effects. We cannot divide by zero, so we cannot score
-days with zero sales. Closed days are therefore removed from the data. For those
-days we simply predict zero, and we do not need a model. And because the metric
-squares the error, a few very bad days can carry a large part of the total.
-That second point turned out to be the key to the whole project.
+Two consequences shaped the project. We cannot divide by zero, so closed days
+are removed from the data and predicted as zero without a model. And because
+the metric squares the error, a few very bad days can carry a large part of
+the total. That second point turned out to be the key to the whole project.
 
 ## What we found in the data
 
-The notebook `notebooks/01_eda.ipynb` explores the data. These are the main
-results.
+The notebook `01_eda.ipynb` explores the data. The short version:
 
-**The data is clean.** All values are in a normal range. There are no rows that
-contradict each other. Every store in the daily table also exists in the store
-table. Only one value looks wrong: one store says that its competitor opened in
-1900, which is clearly a placeholder.
-
-**Sales follow a weekly pattern.** Monday is the strongest day, and sales go
-down slowly until the weekend. Almost all stores close on Sunday. The few stores
-that stay open are special, so we cannot compare their Sunday average with the
-other days.
-
-**December is the best month.** Sales rise a lot before Christmas and then fall
-again in the quiet summer months. Over the two and a half years there is no
-strong growth and no strong decline. Sales move because of the season and the
-promotions, not because the business is growing.
-
-**Promotions work well.** Stores sell clearly more on promotion days. This is a
-useful feature, because the company plans its promotions in advance. We know
-them at prediction time.
-
-**Some stores are very different.** Store type `b` sells much more than the
-others, but there are only 17 such stores. Product range `b` is even rarer, with
-only 9 stores. These groups are too small for their own model, so we use them as
-features instead.
-
-**About 180 stores disappear for six months in 2014.** These stores were closed
-for renovation. Their rows are simply missing from the data. This is important,
-because those stores have a shorter history than the others.
-
-**We must not use the `Customers` column.** The number of customers and the
-sales of a store are almost the same information. If we train on it, our test
-score looks excellent, but the model is useless. In real life we do not know the
-number of customers six weeks in advance.
+- **The data is clean**, with one placeholder value (a competitor that opened
+  in 1900).
+- **Sales follow a weekly pattern**, Monday strongest, and almost every store
+  closes on Sunday. December is the best month; there is no growth trend over
+  the two and a half years.
+- **Promotions work well**, and the company plans them in advance, so they are
+  a feature we may use.
+- **About 180 stores disappear for six months in 2014**, closed for
+  renovation. Their history is shorter than the others'.
+- **The `Customers` column must not be used.** It is almost the same fact as
+  the sales, and nobody knows it six weeks ahead.
 
 ## How we test a change
 
@@ -115,22 +90,17 @@ it predicts, and the score would be far too good.
 
 The four windows are not equally hard. The two spring windows contain carnival
 and Easter, and their error is larger. This is exactly why we use four windows
-and not one. For the baseline, a single window would have reported 0.1449,
-which is the friendliest of the four results.
+and not one: for the baseline, a single window would have reported 0.1449,
+the friendliest of the four results.
 
 XGBoost draws a random part of the rows and columns for each tree, so a single
 run moves by a few thousandths, and one lucky seed can flatter a result. Every
 accepted model is therefore the average of three seeds. **A change stays only
-if it is better on every window by more than the seed noise.**
-
-From notebook 07 on, a new idea is first screened with one seed on all four
-windows. Only an idea that wins on every window is run again with three seeds,
-and nothing is accepted before that. This cuts the training time by more than
-half, and the bar for accepting a change stays where it was.
+if it is better on every window by more than the seed noise.** From notebook
+07 on, a new idea is first screened with one seed on all four windows, and
+only a winner is run again with three.
 
 ## Results
-
-Every model is measured on the four validation windows described above.
 
 | Window ends | Baseline | XGBoost | Per segment | + closed days and Easter |
 |---|---|---|---|---|
@@ -140,9 +110,9 @@ Every model is measured on the four validation windows described above.
 | 2015-07-31 | 0.1449 | 0.1364 | 0.1345 | 0.1102 |
 | **Average** | **0.1664** | **0.1497** | **0.1451** | **0.1189** |
 
-A lower number is better. The baseline is simple: for each store, weekday and
-promotion state, it predicts the median sales of the past. The XGBoost columns
-are the average of three random seeds, and every model wins on every window.
+A lower number is better. The baseline predicts, for each store, weekday and
+promotion state, the median sales of the past. The XGBoost columns are the
+average of three random seeds, and every model wins on every window.
 
 The last column is the final model: one XGBoost per store group, trained on
 the logarithm of the sales, with the closed-day columns and the distance to
@@ -155,58 +125,56 @@ hardest window.
 
 **One model per store group** is worth another 0.005. We describe each store by
 ratios, such as how much a promotion helps it, and put the stores into four
-behaviour groups. Four models, one for each group, beat a single model on every
-window. Handing the group to a single model as a feature does almost nothing,
-so the grouping has to change the shape of the model, not only the list of
-features.
+behaviour groups. Four models beat a single model on every window; handing
+the group to a single model as a feature does almost nothing.
 
 **Showing the model the closed days around each date** is worth 0.024, the
 largest single gain of the project, and the error analysis found it. Six small
 columns say whether the shop was open yesterday, whether it will be open
 tomorrow, and how far the closest state holiday is. All of them are known six
-weeks in advance. One more small feature, the distance to Easter, adds 0.002
-on top - almost all of it on the carnival and Easter windows, which is exactly
-what it was built for. Notebook `06_features.ipynb` shows the test, and also a
-check that the gain lands on the closure days and not somewhere surprising.
+weeks in advance. The distance to Easter adds 0.002 on top, almost all of it
+on the carnival and Easter windows. Notebook `06_features.ipynb` has the
+test.
 
-## Where the model fails
+## What the error means for the business
 
-The notebook `05_error_analysis.ipynb` runs the segmented model again, keeps
-every scored row, and asks where the error sits. This notebook decided what
-was built next.
+On the last validation window, a typical open day sells 6,400 units and the
+median miss is 400 units, or 6 percent. Half of the days are within 400 units,
+nine in ten within 1,200. The forecast is too high on 48 percent of the days
+and too low on 52 percent, and over the six weeks it sums to 0.7 percent below
+the real total, so it does not lean to one side.
 
-**The error is in the days, not in the stores.** This is the main result, and it
-was not what we expected. The worst 10 percent of the stores carry 33 percent of
-the error, which is not much more than their share. But there are only 168
-validation days, and the **worst ten of them carry 36.4 percent of the error**. A
-store with a large error in one window is mostly fine in the next one: the
-correlation between the windows is only +0.08 to +0.31.
+The error does not grow with the distance. The first week ahead scores 0.094,
+the sixth 0.125, and the weeks between move up and down with the calendar,
+not with the horizon. The reason is that the model has no memory of the last
+few days: every feature is known in advance, so week six is as easy as week
+one. The price of that design is that the model cannot react to a shock that
+started yesterday.
 
-**Two days explain the hardest window.** The 16th and 17th of February 2015 are
-5.5 percent of the rows of that window and carry 47 percent of its error.
-Without them the window scores 0.1312 instead of 0.1759, which would make it the
-second easiest of the four. Those are the German carnival days.
+Each forecast can come with an 80 percent interval, built from the spread of
+the model's own recent misses. On the last window it held 75 percent of the
+real sales, a little less than promised; notebook 10 says why.
 
-**The model cannot see the closed days around it.** A day that follows a closed
-day scores 0.187, and a day before one scores 0.171, against 0.123 for a normal
-day. Together they are 38 percent of the rows. The reason is simple: closed days
-are removed from our data, so the model knows that today is a holiday but not
-that tomorrow is one. The days around Easter, Ascension Day and Whit Monday are
-all predicted 17 to 28 percent too low, because people buy before the shop
-closes. This finding became the closed-day columns of the final model.
+## Where the model fails, and what that decided
+
+The notebook `05_error_analysis.ipynb` keeps every scored row of the segmented
+model and asks where the error sits. Three findings decided the rest of the
+project.
+
+**The error is in the days, not in the stores.** The worst 10 percent of the
+stores carry 33 percent of the error, barely more than their share. But the
+worst ten of the 168 validation days carry 36 percent, and two carnival days
+alone carry 47 percent of the hardest window's error.
+
+**The model cannot see the closed days around it.** A day after a closed day
+scores 0.187 and a day before one 0.171, against 0.123 for a normal day. The
+closed days are removed from the data, so the model knows that today is a
+holiday but not that tomorrow is one. This became the closed-day columns.
 
 **Easter moves, and the model cannot follow it.** Carnival is always 48 days
-before Easter, so it fell on the 11th of February in 2013, the 3rd of March in
-2014 and the 16th of February in 2015. The model reads a date as a month, a day
-and a week number, so it cannot line those years up. The carnival week scores
-0.335 and the week before Easter 0.213, against 0.09 to 0.15 for a normal week.
-This finding became the distance to Easter.
-
-The notebook also warns against a mistake that was easy to make. Monday, "the
-day after a closed day" and "the first day of a promotion" all look like strong
-findings on their own, but they are almost the same rows: 23,829 of the 24,543
-Monday rows follow a closed Sunday. Counting them as three features would count
-one effect three times.
+before Easter, which fell on three different dates in the three years. The
+model reads a date as a month and a day, so it cannot line the years up. This
+became the distance to Easter.
 
 ## What did not work, and why
 
@@ -216,83 +184,114 @@ too.
 
 **A clear pattern is not a feature.** Notebook 03 found two clean patterns in
 the raw data, built a feature for each, and measured no gain at all. The model
-already knew them through the store averages. This became the rule for every
-later idea: a pattern in the data is a reason to test, not a reason to keep.
+already knew them through the store averages.
 
-**The days since a renovated store came back.** The error analysis found that
-a store scores 0.265 in its first month back. The feature counts the days
-since a long closure, and a second version also computes the store averages
-from the new history only. Both versions lose. The column improves the first
-month back, from 0.31 to 0.28, but that is 47 rows. Every later group of days
-is worse, and so are the 134,834 rows of the stores that never closed for long.
-The problem is real, but it is too narrow for a feature that every tree can
-see. Notebook `07_reopening_and_month.ipynb` has the test.
+**The days since a renovated store came back** (notebook 07). The column
+improves the first month back, from 0.31 to 0.28, but that is 47 rows. Every
+later group of days is worse, and so are the 134,834 rows of stores that
+never closed for long. A real problem, too narrow for a feature every tree
+can see.
 
-**The start of the month.** Days 1 to 5 carry a larger error than days 6 to 10.
-We built a flag for the first five days and a countdown to the end of the
-month, and the score did not move at all: 0.1211 against 0.1210. We expected
-this before running it. The model already has the day of the month as a
-number, and a tree can split on it whenever that helps.
+**The start of the month** (notebook 07). A flag for days 1 to 5 and a
+countdown to the end of the month: 0.1211 against 0.1210. The model already
+has the day of the month as a number.
 
-**Tuning the model.** Notebook `08_tuning_and_calibration.ipynb` ranks eight
-settings on the inner six weeks of the newest window, in about seven minutes.
-The settings we had used since notebook 03 won: 0.1021 against 0.1033 for the
-closest challenger, which takes two and a half times as long. Every setting
-with a faster learning rate was at least 0.003 behind. The confirmation run
-also taught us that the patience of the early stopping is a setting in its own
-right: with 30 rounds instead of 50 the score was 0.002 worse on two windows.
-The model keeps the settings that were measured properly.
+**Tuning** (notebook 08). Eight settings ranked on the inner six weeks of the
+newest window; the settings used since notebook 03 won, and every faster
+learning rate was at least 0.003 behind.
 
-**The correction for the logarithm.** The model learns the logarithm of the
-sales, and undoing it leaves the predictions a little low. One multiplier,
-learned on the six weeks before each window, should fix that. It does not: the
-score gets worse by 0.0007. The reason is that the bias moves. On the oldest
-window the model over-predicts by three percent, on the later ones it
-under-predicts by one, and the next six weeks want a different factor than the
-six weeks before them. Even the best possible factor, learned on the scored
-rows themselves, would gain only 0.0012.
+**The correction for the logarithm** (notebook 08). One multiplier, learned on
+the six weeks before each window, makes the score worse by 0.0007, because
+the bias moves from one six-week block to the next. Even the best possible
+factor would gain only 0.0012.
 
 ## From the experiment to the forecast
 
-Notebook `09_forecast.ipynb` closes the project. It starts with the road
-that led here - the order of the steps and why each came where it did, what a
-backtest is, and the four jobs a hidden window does - and then it does the
-work that the other notebooks left out.
+Notebook `09_forecast.ipynb` starts with the road that led here - the order
+of the steps and why each came where it did, what a backtest is, and the four
+jobs a hidden window does - and then does the work the other notebooks left
+out.
 
 **The saved file gives the number of the notebooks.** The final model lives
 in `src/forecaster.py`: one object that holds the fitted store statistics,
-the store groups, the four models and the calendar of opening days, and that
-can be saved and loaded. Trained on the days before the last validation
-window, saved, loaded and asked to predict that window, it scores 0.1083
-against 0.1102 in notebook 06. The production path and the experiment are
-the same code.
+the store groups, the four models and the calendar of opening days. Trained
+on the days before the last validation window, saved, loaded and asked to
+predict that window, it scores 0.1083 against 0.1102 in notebook 06.
 
 **The model has learned, not memorised.** On the days it trained on the
 model scores 0.0895, on the hidden window 0.1083, and the baseline on that
-window is 0.1449. The gap between training and hidden days is small, and both
-are far below the baseline. The number of trees is chosen inside every fit by
-early stopping, which is the main guard against memorising.
+window is 0.1449.
 
 **Leakage, shown and not only claimed.** Every one of the 31 features is
-listed with the place it comes from: the date, the facts about the store, the
-plans of the company and the state, the opening plan, and statistics learned
-from the training past. Then the experiment notebook 01 refused: with the
-`Customers` column added, the hidden window scores 0.0620 instead of 0.1083.
-That is what a leak looks like - a score no real forecast could reach.
+listed with the place it comes from. Then the experiment notebook 01 refused:
+with the `Customers` column added, the hidden window scores 0.0620. That is
+what a leak looks like.
 
 **The forecast.** The final model learns from every day up to 31 July 2015
 and scores the 41,088 rows of `test.csv`. The competition never published the
-answers, so the forecast is checked for shape instead: closed days are zero,
-the mean per weekday matches the last six weeks of training, and the level of
-each store sits at a median of 1.002 times its recent past. The saved model
-also scores a single new row, with one lesson worth knowing: the row must
-come with the opening plan of the days around it, because the closed-day
-columns need to know whether tomorrow is open. Alone, store 1 on 20 August
-is predicted at 5,395; with its plan, at 4,496.
+answers, so the forecast is checked for shape: closed days at zero, weekday
+means matching the last six weeks, store levels at a median of 1.002 times
+their recent past. A single new row is scored too, with one lesson: it must
+come with the opening plan of the days around it, and `predict` refuses it
+otherwise. The notebook ends with what a company adds after this point -
+monitoring with thresholds, retraining with a challenger, a model registry -
+and why the loop itself is not here.
 
-The notebook ends with what a company adds after this point - monitoring,
-scheduled retraining, a model registry, serving - and why none of it is
-needed here.
+## The questions a reviewer would ask
+
+A senior review of this repository produced a list of questions. Notebook
+`10_review_questions.ipynb` answers each one on the last validation window,
+with one seed. The short answers:
+
+- **Why gradient boosting and not a time-series model?** A second baseline of
+  the time-series kind, the same weekday one year ago, scores 0.161, worse
+  than the median baseline at 0.145; the model scores 0.108. With 1,115 short
+  series that share one calendar and one set of promotions, a model that
+  learns across the stores beats a model per store, and it takes the
+  promotion plan and the opening plan as inputs, which a classical series
+  model cannot.
+- **Why the logarithm, and not an objective closer to RMSPE?** The exact objective - raw sales with the weight `1 / sales squared` - scores 0.1145 against 0.1083 for the logarithm. The weights hand the trees to the small stores; the logarithm gives every store the same voice.
+- **Why four segments?** Three score 0.1089, four 0.1083, six 0.1112. Three
+  and four are within the seed noise; six splits the stores too thin.
+- **Notebook 08 left 0.002 unexplained. Patience or tree reuse?** Patience.
+  Waiting 30 rounds instead of 50 stops two of the four groups far too early
+  and costs 0.006 on this window; reusing the tree count across seeds costs
+  0.0003, nothing.
+- **One seed in production, three in the backtest?** Averaging the
+  predictions of three seeds scores 0.1084 against 0.1096 for the mean of
+  their single scores - one thousandth, at three times the file. The option
+  exists (`seeds=`), the default stays one.
+- **How sure is the forecast?** The 80 percent interval, built from each
+  group's misses on its inner window, is 23 percent of the prediction wide
+  and held 75 percent of the real sales six weeks later. The spread of six
+  weeks ago is a little narrower than the spread of today.
+- **Why is the model file 75 MB?** 49 MB are the four boosters, about a
+  thousand trees each; 25 MB are the calendar of opening days, kept so that
+  any date can be scored, not only the future.
+- **What is distinctive about the closed-day family?** Not the feature; the
+  road to it, which predicted the gain before the columns were built and then
+  said no to two other features and to the tuning.
+- **The weekly retraining gives a worse model - then what?** It is not
+  promoted. It is scored on the last window next to the model in production
+  and replaces it only if it is not worse by more than the seed noise.
+- **How is drift noticed?** `evaluate` scores every week against the real
+  sales; the backtest's windows scored between 0.10 and 0.17, so one week
+  above 0.17 is a warning and two in a row are an alarm. The shape checks of
+  notebook 09 run on the new rows before they are scored.
+
+## What I would do with more time
+
+- **Lag features, with a short horizon.** The model has no memory of the last
+  days on purpose. A second model for the first week, with lags, would react
+  to shocks; the six-week model would stay for the plan.
+- **An asymmetric loss.** Running out of stock and holding too much stock do
+  not cost the same. With the two costs from the business, a quantile model
+  would forecast the level that minimises the expected cost, not the median.
+- **Calibrated intervals.** The 80 percent interval holds 75 percent. A
+  wider quantile, or ratios updated every week, would close the gap.
+- **The two carnival days.** They carry 47 percent of the hardest window's
+  error. A feature for the carnival Monday and Tuesday specifically was not
+  tried.
 
 ## Project structure
 
@@ -308,6 +307,7 @@ notebooks/
   07_reopening_and_month.ipynb  the last two ideas of the list, tested and rejected
   08_tuning_and_calibration.ipynb  the settings of the model, and the correction for the logarithm
   09_forecast.ipynb   the road from experiment to forecast, the final model, and the test predictions
+  10_review_questions.ipynb  the questions a reviewer would ask, each one measured
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -326,85 +326,26 @@ LICENSE               MIT
 The notebooks tell the story in order, and each one ends with its key
 findings. The code they share lives in `src/`.
 
-`src/data_loader.py` reads `train.csv` and `store.csv`. It fixes a small problem
-in the raw file, where the column `StateHoliday` mixes the number `0` and the
-text `"0"`. It then joins the store facts to every daily row, removes the closed
-days, and sorts the rows by store and date.
+`src/features.py` builds the features with the `fit` and `transform` pattern:
+`fit` learns the store statistics from the training data only, `transform`
+builds the columns known in advance and joins the learned values. This is
+what protects the model from leakage. The closed-day columns come from a
+calendar of opening days, which is reference data, not something learned.
 
-`src/features.py` builds the features. It uses the `fit` and `transform` pattern
-from scikit-learn:
+`src/validation.py` cuts the data by date into the four windows. `src/model.py`
+trains XGBoost on the logarithm of the sales and chooses the number of trees
+on an inner window taken from the end of the training data, so that the
+validation window stays untouched. `src/segments.py` puts every store into one
+of four behaviour groups. `src/forecaster.py` holds all of it in one object
+that can be saved, loaded and used from the command line, and writes a JSON
+card next to the model file.
 
-- `fit` learns from the training data only. It calculates the average sales of
-  each store, the average sales of each store on each weekday, and how much each
-  store gains from a promotion.
-- `transform` builds the simple features, such as the year, the month and the
-  week, and then joins the values that `fit` has learned.
-
-This split is not only a question of style. It protects us from leakage. Every
-learned value comes from the training period, so nothing from the future can
-enter the features.
-
-The builder can also take a calendar with the closed days kept. From it it
-builds the closed-day columns, such as `open_tomorrow` and the distance to the
-closest state holiday. This is reference data, not something we learn: the
-company plans its opening days in advance, and the competition provides them
-for the test period too. The rejected features are in the same file, behind
-flags that are off by default, so every notebook keeps reproducing.
-
-`src/validation.py` cuts the data by date into the four windows described
-above.
-
-`src/metrics.py` holds RMSPE and a function that splits the error by any
-column, for example by store type or by month. That breakdown tells us where
-the model is weak.
-
-`src/model.py` trains XGBoost on the logarithm of the sales, and turns the
-prediction back at the end. It also chooses the number of trees on a small
-inner window taken from the end of the training data, so that the validation
-window stays untouched. When only the random seed changes, the tree count
-from the first seed can be passed in and the inner window is skipped.
-
-`src/experiment.py` runs one approach on all four windows and collects the
-scores. It asks for a function that trains on the rows of a single fold, which
-keeps the fitting inside the fold where it belongs.
-
-`src/segments.py` puts every store into one of four groups. It describes a
-store by ratios, such as how much a promotion helps it, so that the groups
-follow the behaviour of a store and not its size.
-
-`src/forecaster.py` is the model that stays. It holds every fitted part - the
-store statistics, the groups, the four models - and the calendar of opening
-days, in one object that can be saved and loaded. It can be used from Python
-or from the command line, and the file it writes comes with a small JSON card:
-the training period, the tree counts, the code version and the package
-versions. Its `evaluate` command is the step that comes after the forecast:
-when the real sales of the period are known, it joins them to the predictions
-and reports the error, overall and per week.
-
-`tests/` holds the unit tests. The real data cannot be shared, so the tests
-build a small made-up table with the same shape - a few dozen stores, a weekly
-pattern, closed Sundays, a promotion cycle - and run every part of `src` on
-it in seconds. They check the things that are easy to get wrong quietly: that
-the metric leaves zero-sales rows out, that every validation window comes
-after its training days, that the learned statistics never see the rows they
-are joined onto, and that a saved model gives the same forecast after it is
-loaded. GitHub Actions runs them on every push.
-
-The first run on GitHub failed, and the reason is worth keeping. On this
-machine the tests were started with `python -m pytest`, which puts the
-project folder on Python's path, so `import src` works. The workflow ran
-plain `pytest`, which does not, and every test file failed at its first
-import. Nothing was wrong with the code; the two commands were simply not the
-same. That is exactly what continuous integration is for: a fresh machine
-that knows nothing about how you started things locally, running the exact
-command written in the repository. The fix is `pytest.ini`, which tells
-pytest where the project root is, so that the same command works everywhere.
-The rule it leaves behind: run locally the command that the workflow runs,
-not a cousin of it.
+`tests/` holds 37 unit tests. The real data cannot be shared, so they build a
+small made-up table with the same shape and run every part of `src` on it in
+seconds. GitHub Actions runs them on every push; notebook 09 tells what the
+first run taught.
 
 ## What is not in this project
-
-Some things were left out on purpose.
 
 - **One model per store.** With 1,115 stores that is 1,115 models. A model
   with store features is both better and far cheaper here.
@@ -415,11 +356,13 @@ Some things were left out on purpose.
 - **A Kaggle submission.** The competition is closed. The four validation
   windows are built in the shape of its test set, and that is what the
   project is judged on.
+- **MLOps tooling.** The loop a company would build around this model is
+  described in notebook 09; the tools for it are not needed on one machine.
 
 ## How to run
 
-The project runs on Python 3.10. Newer versions should work, but the notebooks
-were executed with 3.10 and the package versions in `requirements.txt`.
+The project runs on Python 3.10, with the package versions in
+`requirements.txt`.
 
 1. Install the packages:
    ```
@@ -431,24 +374,20 @@ were executed with 3.10 and the package versions in `requirements.txt`.
    ```
 3. Unzip the files and put `train.csv`, `store.csv` and `test.csv` into the
    `data/` folder.
-4. Open the notebooks in `notebooks/` and run them from top to bottom.
+4. Open the notebooks in `notebooks/` and run them from top to bottom. They
+   are saved with their outputs, so you can also read them without running
+   anything. The ones that train models take between five minutes and an hour
+   each on a normal laptop.
 5. To train the final model and score a file without a notebook:
    ```
    python -m src.forecaster fit
-   python -m src.forecaster predict data/test.csv --out data/predictions_test.csv
+   python -m src.forecaster predict data/test.csv --out data/predictions_test.csv --interval 0.8
    ```
-   The first command writes `models/forecaster.pkl` with its model card. The
-   second reads any file in the shape of `test.csv` and writes it back with a
-   `prediction` column.
 6. When the real sales of a forecast period are known, score the forecast:
    ```
-   python -m src.forecaster evaluate actual_sales.csv data/predictions_test.csv
+   python -m src.forecaster evaluate actual_sales.csv data/predictions_test.csv --threshold 0.17
    ```
 7. To run the tests, which need no data:
    ```
    pytest
    ```
-
-The notebooks are saved with their outputs, so you can read them without
-running anything. If you do run them, the ones that train models take between
-a quarter of an hour and an hour each on a normal laptop.

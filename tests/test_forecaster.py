@@ -69,3 +69,34 @@ def test_evaluate_reports_the_overall_and_weekly_error(fitted, future):
     assert report["rmspe"][0] == pytest.approx(rmspe(open_rows["Sales"], open_rows["prediction"]), abs=1e-4)
     assert report.height >= 3        # "all" and at least two weeks
     assert report["rows"][0] == open_rows.height
+
+
+def test_a_row_without_its_neighbours_is_refused(fitted, future):
+    one = future.filter((pl.col("Store") == 1) & (pl.col("Date") == CUT + timedelta(days=5)))
+    with pytest.raises(ValueError):
+        fitted.predict(one)
+    # With the plan around it, or with the guard switched off, it goes through.
+    assert fitted.predict(one, planned=future)["prediction"][0] > 0
+    assert fitted.predict(one, strict=False)["prediction"][0] > 0
+
+
+def test_the_interval_holds_most_of_the_real_sales(fitted, future):
+    scored = fitted.predict(future, interval=0.8).filter(pl.col("Open") == 1)
+    assert (scored["low"] <= scored["prediction"]).all()
+    assert (scored["prediction"] <= scored["high"]).all()
+    inside = ((scored["Sales"] >= scored["low"]) & (scored["Sales"] <= scored["high"])).mean()
+    assert 0.6 < inside < 0.95
+    report = evaluate(scored, threshold=0.5)
+    assert "coverage" in report.columns and "above_threshold" in report.columns
+    assert not report["above_threshold"][0]
+
+
+def test_two_seeds_average_and_reuse_the_tree_count(train, calendar, future):
+    before = train.filter(pl.col("Date") < CUT)
+    two = Forecaster(params=FAST, seeds=(42, 7)).fit(before, calendar.filter(pl.col("Date") < CUT))
+    for models in two.models_.values():
+        assert len(models) == 2
+        assert models[0].best_rounds_ == models[1].best_rounds_
+    scored = two.predict(future)
+    assert scored["prediction"].null_count() == 0
+    assert two.metadata_["seeds"] == [42, 7]

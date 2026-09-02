@@ -14,6 +14,13 @@ the tree count on the very rows we score, and the result would look better than
 it is. Instead we cut a small inner window from the end of the training data,
 find the best number of trees there, and then train the final model on the
 whole training set with that number.
+
+Why does a count found on nine tenths of the data still fit the whole? More
+rows would support a few more trees, so the count is slightly on the safe
+side, and a safe side is the right side for a count that guards against
+memorising. The alternative, scaling the count up by the size ratio, is a
+guess on top of a measurement. Notebook 08 shows how much the count matters:
+the patience of the early stopping alone moved the score by 0.002.
 """
 
 from __future__ import annotations
@@ -24,8 +31,14 @@ import numpy as np
 import polars as pl
 import xgboost as xgb
 
-# A reasonable starting point. Step 8 of the plan tunes these; until then we
-# keep them fixed, so that every comparison sees the same model.
+# The settings of every model in this project. They were chosen once, by
+# hand, from what usually works on a table of this size (about a million
+# rows, thirty features): a small learning rate with early stopping, trees
+# deep enough to combine store, weekday and promotion in one split path, a
+# light minimum leaf size against noise, and a random 90 percent of the rows
+# and 80 percent of the columns per tree so that the trees differ from each
+# other. Notebook 08 ranked eight alternatives on the inner window and none
+# beat these, so they stayed.
 DEFAULT_PARAMS: dict = {
     "objective": "reg:squarederror",
     "eta": 0.05,
@@ -106,6 +119,7 @@ class SalesModel:
         feature_names: list[str],
         target_col: str = "Sales",
         date_col: str = "Date",
+        weight_col: str | None = None,
     ) -> "SalesModel":
         """Train on `train`, and count the trees on an inner window.
 
@@ -117,8 +131,13 @@ class SalesModel:
             The columns that form the model matrix.
         target_col, date_col:
             The names of the target column and of the date column.
+        weight_col:
+            A column with a weight per row, for example `1 / Sales ** 2` to
+            make the squared error read as a percentage. Notebook 10 tests
+            that against the logarithm. Off by default.
         """
         self.feature_names_ = list(feature_names)
+        self._weight_col = weight_col
 
         cut = train[date_col].max() - timedelta(days=self.inner_valid_days)
         inner_train = train.filter(pl.col(date_col) <= cut)
@@ -136,9 +155,9 @@ class SalesModel:
         else:
             watch = xgb.train(
                 self.params,
-                self._matrix(inner_train, target_col),
+                self._matrix(inner_train, target_col, weighted=True),
                 num_boost_round=self.num_boost_round,
-                evals=[(self._matrix(inner_valid, target_col), "inner_valid")],
+                evals=[(self._matrix(inner_valid, target_col, weighted=True), "inner_valid")],
                 early_stopping_rounds=self.early_stopping_rounds,
                 verbose_eval=False,
             )
@@ -154,7 +173,7 @@ class SalesModel:
         # Step two: train the real model on everything, with that count.
         self.booster_ = xgb.train(
             self.params,
-            self._matrix(train, target_col),
+            self._matrix(train, target_col, weighted=True),
             num_boost_round=self.best_rounds_,
             verbose_eval=False,
         )
@@ -190,7 +209,8 @@ class SalesModel:
         ).sort(kind, descending=True)
 
     # -------------------------------------------------------------- internal
-    def _matrix(self, df: pl.DataFrame, target_col: str | None = None) -> xgb.DMatrix:
+    def _matrix(self, df: pl.DataFrame, target_col: str | None = None,
+                weighted: bool = False) -> xgb.DMatrix:
         """Build the XGBoost matrix, with the target in log space if asked."""
         missing = [c for c in self.feature_names_ if c not in df.columns]
         if missing:
@@ -202,4 +222,7 @@ class SalesModel:
             label = df[target_col].to_numpy().astype(float)
             if self.log_target:
                 label = np.log1p(label)
-        return xgb.DMatrix(x, label=label, feature_names=self.feature_names_)
+        weight = None
+        if weighted and getattr(self, "_weight_col", None):
+            weight = df[self._weight_col].to_numpy().astype(float)
+        return xgb.DMatrix(x, label=label, weight=weight, feature_names=self.feature_names_)

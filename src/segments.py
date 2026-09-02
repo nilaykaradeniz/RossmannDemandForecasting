@@ -21,6 +21,20 @@ The work happens in three steps.
    behaviour sits from the average store, and then join the cells with similar
    lift into a handful of segments.
 
+Two choices in step 2 and 3 deserve a reason. A cell with too few stores is
+joined to the cell whose centre is nearest in the standardised behaviour
+space, one at a time, smallest first, until every cell is large enough or
+only as many cells as segments remain. Fifteen stores is the floor because a
+mean over fewer is not a stable description. The cells are then joined with
+Ward's method, which at every step merges the two groups that increase the
+within-group spread the least - the natural choice when the groups should be
+compact in behaviour, and a method with no random start, so that the same
+data gives the same segments every time. With only a few dozen cells, the
+cost of the method does not matter.
+
+Four segments was a choice, not a measurement, until notebook 10 tested
+three and six against it on the last window.
+
 Everything is learned in `fit`, from the training rows only. `transform` only
 looks the answer up, so a segment can never carry information from the window
 we are about to score.
