@@ -390,6 +390,18 @@ after its training days, that the learned statistics never see the rows they
 are joined onto, and that a saved model gives the same forecast after it is
 loaded. GitHub Actions runs them on every push.
 
+The first run on GitHub failed, and the reason is worth keeping. On this
+machine the tests were started with `python -m pytest`, which puts the
+project folder on Python's path, so `import src` works. The workflow ran
+plain `pytest`, which does not, and every test file failed at its first
+import. Nothing was wrong with the code; the two commands were simply not the
+same. That is exactly what continuous integration is for: a fresh machine
+that knows nothing about how you started things locally, running the exact
+command written in the repository. The fix is `pytest.ini`, which tells
+pytest where the project root is, so that the same command works everywhere.
+The rule it leaves behind: run locally the command that the workflow runs,
+not a cousin of it.
+
 ## What is not in this project
 
 Some things were left out on purpose.
