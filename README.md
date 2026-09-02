@@ -1,5 +1,7 @@
 # Rossmann Demand Forecasting
 
+![tests](https://github.com/nilaykaradeniz/RossmannDemandForecasting/actions/workflows/tests.yml/badge.svg)
+
 Rossmann is a large drugstore chain in Germany. This project predicts how much
 each of its 1,115 stores will sell on each day, six weeks into the future.
 
@@ -314,7 +316,8 @@ src/
   model.py            XGBoost on the logarithm of the sales
   experiment.py       runs one approach on every fold and collects the scores
   segments.py         groups the stores by the way they react
-  forecaster.py       the final model: train once, save, score new rows
+  forecaster.py       the final model: train once, save, score new rows, evaluate later
+tests/                unit tests on made-up data, run by pytest and by GitHub Actions
 models/               the saved model and its card (written by the fit command, not shared)
 requirements.txt      the Python packages you need, with their versions
 LICENSE               MIT
@@ -374,7 +377,18 @@ store statistics, the groups, the four models - and the calendar of opening
 days, in one object that can be saved and loaded. It can be used from Python
 or from the command line, and the file it writes comes with a small JSON card:
 the training period, the tree counts, the code version and the package
-versions.
+versions. Its `evaluate` command is the step that comes after the forecast:
+when the real sales of the period are known, it joins them to the predictions
+and reports the error, overall and per week.
+
+`tests/` holds the unit tests. The real data cannot be shared, so the tests
+build a small made-up table with the same shape - a few dozen stores, a weekly
+pattern, closed Sundays, a promotion cycle - and run every part of `src` on
+it in seconds. They check the things that are easy to get wrong quietly: that
+the metric leaves zero-sales rows out, that every validation window comes
+after its training days, that the learned statistics never see the rows they
+are joined onto, and that a saved model gives the same forecast after it is
+loaded. GitHub Actions runs them on every push.
 
 ## What is not in this project
 
@@ -391,6 +405,9 @@ Some things were left out on purpose.
   project is judged on.
 
 ## How to run
+
+The project runs on Python 3.10. Newer versions should work, but the notebooks
+were executed with 3.10 and the package versions in `requirements.txt`.
 
 1. Install the packages:
    ```
@@ -411,6 +428,14 @@ Some things were left out on purpose.
    The first command writes `models/forecaster.pkl` with its model card. The
    second reads any file in the shape of `test.csv` and writes it back with a
    `prediction` column.
+6. When the real sales of a forecast period are known, score the forecast:
+   ```
+   python -m src.forecaster evaluate actual_sales.csv data/predictions_test.csv
+   ```
+7. To run the tests, which need no data:
+   ```
+   pytest
+   ```
 
 The notebooks are saved with their outputs, so you can read them without
 running anything. If you do run them, the ones that train models take between

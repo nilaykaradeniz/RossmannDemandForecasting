@@ -17,11 +17,15 @@ And from the command line::
 
     python -m src.forecaster fit
     python -m src.forecaster predict data/test.csv --out data/predictions.csv
+    python -m src.forecaster evaluate actual_sales.csv data/predictions.csv
 
 `fit` reads the data folder, trains on every open day and writes the model.
 `predict` reads a file in the shape of `test.csv` and writes it back with a
-`prediction` column. Next to the model file, `save` writes a small JSON file
-that says when the model was trained, on which days, and with which packages.
+`prediction` column. `evaluate` is the step that comes later, when the real
+sales of the forecast period are known: it joins them to the predictions and
+reports the error, overall and per week. Next to the model file, `save`
+writes a small JSON file that says when the model was trained, on which
+days, and with which packages.
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ import polars as pl
 
 from src.data_loader import DataLoader
 from src.features import FeatureBuilder, build_closure_calendar
+from src.metrics import rmspe
 from src.model import SalesModel, DEFAULT_PARAMS
 from src.segments import StoreSegmenter
 
@@ -206,6 +211,28 @@ class Forecaster:
         return forecaster
 
 
+def evaluate(scored: pl.DataFrame, actual_col: str = "Sales",
+             pred_col: str = "prediction") -> pl.DataFrame:
+    """Score a forecast against the real sales, overall and per week.
+
+    This is the monitoring step: it runs when the real sales of a forecast
+    period have arrived. Rows with zero sales are left out, as the metric
+    requires. The first row of the result is the whole period, the rows
+    after it are the weeks, so that a bad week shows up on its own.
+    """
+    rows = scored.filter(pl.col(actual_col) > 0)
+    if rows.height == 0:
+        raise ValueError("No rows with sales to score.")
+    report = [{"week": "all", "rows": rows.height,
+               "rmspe": rmspe(rows[actual_col], rows[pred_col])}]
+    weekly = rows.with_columns(pl.col("Date").dt.truncate("1w").alias("_week")).sort("_week")
+    for key, part in weekly.group_by("_week", maintain_order=True):
+        week = key[0] if isinstance(key, tuple) else key
+        report.append({"week": str(week), "rows": part.height,
+                       "rmspe": rmspe(part[actual_col], part[pred_col])})
+    return pl.DataFrame(report).with_columns(pl.col("rmspe").round(4))
+
+
 def _package_versions() -> dict[str, str]:
     import polars, numpy, xgboost, sklearn  # noqa: E401
     return {"polars": polars.__version__, "numpy": numpy.__version__,
@@ -236,7 +263,20 @@ def main(argv: list[str] | None = None) -> None:
     predict.add_argument("--data", default="data", help="folder with store.csv")
     predict.add_argument("--out", default=None, help="where to write the result (default: print a summary)")
 
+    check = sub.add_parser("evaluate", help="score a forecast against the real sales")
+    check.add_argument("actual", help="CSV with Store, Date and Sales")
+    check.add_argument("predictions", help="CSV written by the predict command")
+
     args = parser.parse_args(argv)
+    if args.command == "evaluate":
+        actual = pl.read_csv(args.actual, try_parse_dates=True,
+                             schema_overrides={"StateHoliday": pl.Utf8}).select(["Store", "Date", "Sales"])
+        predictions = pl.read_csv(args.predictions, try_parse_dates=True)
+        joined = actual.join(predictions.select(["Store", "Date", "prediction"]),
+                             on=["Store", "Date"], how="inner")
+        print(f"{joined.height:,} rows matched between the two files.")
+        print(evaluate(joined))
+        return
     if args.command == "fit":
         loader = DataLoader(args.data)
         forecaster = Forecaster().fit(loader.load(), loader.load(drop_closed=False))
