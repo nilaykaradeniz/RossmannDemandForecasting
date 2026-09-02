@@ -77,6 +77,29 @@ CLOSURE_COLUMNS = [
     "days_since_last_holiday",
 ]
 
+# A closed stretch of at least this many days counts as a long closure, for
+# example a renovation. The longest normal closures in this data are holiday
+# blocks of three or four days, so three weeks is far above them.
+_LONG_CLOSURE_DAYS = 21
+
+# After this many days a reopening is old news. Every day further away gets
+# this value, and so does a store that never had a long closure.
+_REOPENING_CAP = 365
+
+# A store needs at least this many trading days after its reopening before we
+# trust statistics that are computed from those days alone.
+_MIN_DAYS_AFTER_REOPENING = 60
+
+# The column that `with_reopening=True` adds.
+REOPENING_COLUMNS = ["days_since_reopening"]
+
+# The first days of the month, for the `month_start` flag. Notebook 05
+# measured the error of days 1 to 5 at 0.178 against 0.116 for days 6 to 10.
+_MONTH_START_DAYS = 5
+
+# The columns that `with_month=True` adds.
+MONTH_COLUMNS = ["month_start", "days_to_month_end"]
+
 
 def easter_sunday(year: int) -> date:
     """Return the date of Easter Sunday, with the usual Gregorian rule.
@@ -217,6 +240,67 @@ def _closure_columns(is_open: np.ndarray, is_holiday: np.ndarray,
     }
 
 
+def build_reopening_calendar(calendar: pl.DataFrame) -> pl.DataFrame:
+    """Count, for every store and day, the days since its last long closure.
+
+    About 180 stores were closed for a renovation for around six months in
+    2014. Notebook 05 measured what their return costs: 30 to 59 days after
+    the first day back the error is 0.265, and one month later it is 0.127.
+    The problem is narrow and it ends by itself, so the feature is the *time*
+    since the reopening, not the fact of the renovation.
+
+    A long closure is a closed stretch of at least `_LONG_CLOSURE_DAYS` days.
+    A missing row counts as closed, exactly as in `build_closure_calendar`.
+    The count starts at 0 on the first open day back and is cut at
+    `_REOPENING_CAP`. A day before any long closure, and a store that never
+    had one, get the cap: for the model they are all simply "not recent".
+
+    Like the closed-day family this is reference data, not something we
+    learn. Which days a store traded is a fact of the past at prediction
+    time.
+    """
+    needed = {"Store", "Date", "Open"}
+    missing = needed - set(calendar.columns)
+    if missing:
+        raise ValueError(f"The calendar has no column(s): {sorted(missing)}")
+
+    first_day = calendar["Date"].min()
+    last_day = calendar["Date"].max()
+    n_days = (last_day - first_day).days + 1
+
+    rows = []
+    for key, part in calendar.sort("Date").group_by("Store", maintain_order=True):
+        store = key[0] if isinstance(key, tuple) else key
+        index = np.array([(d - first_day).days for d in part["Date"].to_list()])
+
+        is_open = np.zeros(n_days, dtype=bool)
+        is_open[index] = part["Open"].to_numpy() == 1
+
+        # Find the closed stretches. We pad with an open day on both sides,
+        # so that a stretch at the very start or end is still a stretch.
+        closed = (~is_open).astype(np.int8)
+        change = np.diff(np.concatenate([[0], closed, [0]]))
+        starts = np.flatnonzero(change == 1)
+        ends = np.flatnonzero(change == -1) - 1
+
+        since = np.full(n_days, _REOPENING_CAP, dtype=np.int64)
+        for start, end in zip(starts, ends):
+            if end - start + 1 < _LONG_CLOSURE_DAYS or end + 1 >= n_days:
+                continue
+            back = end + 1
+            # A later reopening overwrites an earlier one, so the count
+            # always refers to the newest long closure before the day.
+            since[back:] = np.arange(n_days - back)
+
+        rows.append(pl.DataFrame({
+            "Store": np.full(len(index), store, dtype=np.int64),
+            "Date": part["Date"],
+            "days_since_reopening": np.minimum(since, _REOPENING_CAP)[index],
+        }))
+
+    return pl.concat(rows).sort(["Store", "Date"])
+
+
 class FeatureBuilder:
     """Build the feature matrix, and learn the store statistics from train only.
 
@@ -228,7 +312,10 @@ class FeatureBuilder:
     """
 
     def __init__(self, calendar: pl.DataFrame | None = None,
-                 with_easter: bool = False) -> None:
+                 with_easter: bool = False,
+                 with_reopening: bool = False,
+                 with_reopening_stats: bool = False,
+                 with_month: bool = False) -> None:
         """Set the builder up, with or without the closed-day family.
 
         Parameters
@@ -253,15 +340,42 @@ class FeatureBuilder:
             and Easter Sunday of that year. Off by default, for the same
             reason as the calendar: the earlier notebooks must keep producing
             the numbers they report.
+        with_reopening:
+            Add the `days_since_reopening` column. Needs the calendar,
+            because the reopenings are read from the closed days.
+        with_reopening_stats:
+            On top of the column, compute the learned store statistics from
+            the days after a reopening only, when a store has enough of
+            them. Notebook 07 tests the two parts apart.
+        with_month:
+            Add `month_start` (the first five days of the month) and
+            `days_to_month_end`. Both come from the date alone.
         """
         self.feature_names_: list[str] = []
         self.with_easter = with_easter
+        self.with_reopening = with_reopening
+        self.with_reopening_stats = with_reopening_stats
+        self.with_month = with_month
+        if with_reopening_stats and not with_reopening:
+            raise ValueError("with_reopening_stats needs with_reopening=True.")
         if calendar is None:
             self._closure_ = None
         elif set(CLOSURE_COLUMNS).issubset(calendar.columns):
             self._closure_ = calendar
         else:
-            self._closure_ = build_closure_calendar(calendar)
+            closure = build_closure_calendar(calendar)
+            if with_reopening:
+                closure = closure.join(build_reopening_calendar(calendar),
+                                       on=["Store", "Date"], how="left")
+            self._closure_ = closure
+        if with_reopening and (
+                self._closure_ is None
+                or "days_since_reopening" not in self._closure_.columns):
+            raise ValueError(
+                "with_reopening needs the calendar. Please pass "
+                "DataLoader.load(drop_closed=False), or a prebuilt table "
+                "that already holds the days_since_reopening column."
+            )
 
     # ------------------------------------------------------------------ fit
     def fit(self, train: pl.DataFrame) -> "FeatureBuilder":
@@ -269,20 +383,30 @@ class FeatureBuilder:
         self._global_mean_ = float(train["Sales"].mean())
         self._comp_dist_median_ = float(train["CompetitionDistance"].median())
 
+        # A store that has just come back from a renovation is a different
+        # shop than its own history: averages over the whole training period
+        # describe a store that no longer exists. So, when asked, we compute
+        # the store statistics from the days after the reopening only - but
+        # only for stores with enough of those days, because a mean over a
+        # few weeks is noise.
+        stats_train = train
+        if self.with_reopening_stats:
+            stats_train = self._rows_for_statistics(train)
+
         # Average sales per store.
-        self._store_mean_ = train.group_by("Store").agg(
+        self._store_mean_ = stats_train.group_by("Store").agg(
             pl.col("Sales").mean().alias("store_mean_sales")
         )
         # Average sales per store and weekday.
-        self._store_dow_mean_ = train.group_by(["Store", "DayOfWeek"]).agg(
+        self._store_dow_mean_ = stats_train.group_by(["Store", "DayOfWeek"]).agg(
             pl.col("Sales").mean().alias("store_dow_mean_sales")
         )
         # How much a store gains from a promotion: the average sales on
         # promotion days divided by the average sales on normal days.
-        no_promo = train.filter(pl.col("Promo") == 0).group_by("Store").agg(
+        no_promo = stats_train.filter(pl.col("Promo") == 0).group_by("Store").agg(
             pl.col("Sales").mean().alias("_np_mean")
         )
-        promo = train.filter(pl.col("Promo") == 1).group_by("Store").agg(
+        promo = stats_train.filter(pl.col("Promo") == 1).group_by("Store").agg(
             pl.col("Sales").mean().alias("_p_mean")
         )
         self._store_promo_uplift_ = (
@@ -336,7 +460,9 @@ class FeatureBuilder:
         learned = ["store_mean_sales", "store_dow_mean_sales", "store_promo_uplift"]
         closure = list(CLOSURE_COLUMNS) if self._closure_ is not None else []
         easter = list(EASTER_COLUMNS) if self.with_easter else []
-        return calendar + known + dummies + learned + closure + easter
+        reopening = list(REOPENING_COLUMNS) if self.with_reopening else []
+        month = list(MONTH_COLUMNS) if self.with_month else []
+        return calendar + known + dummies + learned + closure + easter + reopening + month
 
     def _build(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add every feature column to `df`: the simple ones and the joins."""
@@ -347,7 +473,57 @@ class FeatureBuilder:
         df = self._join_learned(df)
         df = self._join_closure(df)
         df = self._add_easter(df)
+        df = self._add_month(df)
         return df
+
+    def _add_month(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Add the start-of-month flag and the distance to the month end.
+
+        The model already has the day of the month as a raw number, so these
+        two columns are a sharper way to say the same thing: `month_start`
+        marks the payday shopping of the first days, and `days_to_month_end`
+        counts down to the next month. Both come from the date alone.
+        """
+        if not self.with_month:
+            return df
+        year = pl.col("Date").dt.year()
+        month = pl.col("Date").dt.month()
+        next_month = pl.date(
+            pl.when(month == 12).then(year + 1).otherwise(year),
+            pl.when(month == 12).then(1).otherwise(month + 1),
+            1,
+        )
+        return df.with_columns(
+            (pl.col("Date").dt.day() <= _MONTH_START_DAYS)
+            .cast(pl.Int8).alias("month_start"),
+            ((next_month - pl.col("Date")).dt.total_days() - 1)
+            .cast(pl.Int32).alias("days_to_month_end"),
+        )
+
+    def _rows_for_statistics(self, train: pl.DataFrame) -> pl.DataFrame:
+        """Drop the pre-renovation history of the stores that came back.
+
+        For every store with a long closure inside the training period, we
+        keep only the rows after its newest reopening - if there are at least
+        `_MIN_DAYS_AFTER_REOPENING` of them. Every other store keeps all of
+        its rows. The result feeds the learned store statistics only; the
+        model still trains on every row.
+        """
+        train_end = train["Date"].max()
+        came_back = (
+            self._closure_
+            .filter((pl.col("days_since_reopening") == 0)
+                    & (pl.col("Date") <= train_end))
+            .group_by("Store").agg(pl.col("Date").max().alias("_back"))
+        )
+        joined = train.join(came_back, on="Store", how="left")
+        recent = pl.col("Date") >= pl.col("_back")
+        enough = (
+            joined.filter(recent).group_by("Store").len()
+            .filter(pl.col("len") >= _MIN_DAYS_AFTER_REOPENING)["Store"]
+        )
+        keep = pl.col("_back").is_null() | ~pl.col("Store").is_in(enough) | recent
+        return joined.filter(keep).drop("_back")
 
     def _add_easter(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add the signed distance in days between the row and Easter Sunday.

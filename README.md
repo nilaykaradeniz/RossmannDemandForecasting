@@ -92,6 +92,7 @@ notebooks/
   04_segmentation.ipynb  grouping the stores, and one model per group
   05_error_analysis.ipynb  where the model fails, and what to build next
   06_features.ipynb   the closed days and Easter enter the model
+  07_reopening_and_month.ipynb  the last two ideas of the list, tested and rejected
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -140,7 +141,8 @@ the model is weak.
 `src/model.py` trains XGBoost on the logarithm of the sales, and turns the
 prediction back at the end. It also chooses the number of trees on a small
 inner window taken from the end of the training data, so that the validation
-window stays untouched.
+window stays untouched. When only the random seed changes, the tree count
+from the first seed can be passed in and the inner window is skipped.
 
 `src/experiment.py` runs one approach on all four windows and collects the
 scores. It asks for a function that trains on the rows of a single fold, which
@@ -246,22 +248,59 @@ findings on their own, but they are almost the same rows: 23,829 of the 24,543
 Monday rows follow a closed Sunday. Counting them as three features would count
 one effect three times.
 
+## Two ideas that did not work
+
+The error analysis list had two items left, and notebook
+`07_reopening_and_month.ipynb` tests them. Both are rejected.
+
+**The days since a renovated store came back.** The error analysis had
+found that a store scores 0.265 in its first month back. The feature counts
+the days since a long closure, and a second version also computes the store
+averages from the new history only. Both versions lose. The column improves
+the first month back, from 0.31 to 0.28, but that is 47 rows. Every later
+group of days is worse, and so are the 134,834 rows of the stores that never
+closed for long. On the oldest window, where the reopened stores have only a
+few weeks of new history, the loss is 0.005 with the column and 0.010 with the
+rewritten averages. The problem is real, but it is too narrow for a feature
+that every tree can see.
+
+**The start of the month.** Days 1 to 5 carry a larger error than days 6 to
+10. We built a flag for the first five days and a countdown to the end of the
+month, and the score did not move at all: 0.1211 against 0.1210. We expected
+this before running it. The model already has the day of the month as a
+number, and a tree can split on it whenever that helps. Notebook 03 had the
+same lesson.
+
+The base in that notebook is trained with a higher learning rate, so that a
+full experiment takes a quarter of an hour instead of an hour. This costs
+0.002, which is why the base reads 0.1210 there and 0.1189 in the table
+above. Every arm of the experiment pays the same price, so the comparison is
+fair, and the tuning step will set the learning rate properly.
+
+The notebook also changes how we test from now on. Three seeds are the right
+price to accept a feature, but a high price to reject one: if an idea is not
+better on the four windows with one seed, two more seeds will not save it. So
+a new idea is first **screened** with one seed on all four windows. Only an
+idea that wins on every window by more than the seed noise is run again with
+three seeds, and nothing is accepted before that. The base model always runs
+with three seeds, which is how we know the seed noise. This cuts the training
+time of a notebook by more than half, and the bar for accepting a change stays
+where it was.
+
 ## Next steps
 
-The metric, the validation setup, the store groups, the error analysis and the
-two feature families it asked for first are ready. The next steps are:
+The metric, the validation setup, the store groups, the error analysis and
+every feature family it asked for are ready. Two steps remain:
 
-1. Add the days since a renovated store came back, and a better day-of-month
-   feature - the remaining items of the error analysis list.
-2. Tune the model parameters, now against a much stronger model.
-3. Correct the small bias that the logarithm leaves behind. It is about 1.3
+1. Tune the model parameters, now against a much stronger model.
+2. Correct the small bias that the logarithm leaves behind. It is about 1.3
    percent and it is the same in every group, so one correction for all stores
    should be enough.
 
-Every one of these has to prove itself the same way as everything before it:
-four windows, three seeds, and a win on every window. Notebook 03 is the
-reminder. A pattern can be very clear in the data and still give the model
-nothing.
+Both have to prove themselves the same way as everything before them: four
+windows, a win on every window, and three seeds before anything is accepted.
+Notebook 03 is the reminder. A pattern can be very clear in the data and still
+give the model nothing.
 
 Two results shape this list. We found a clear pattern in the raw data, built two
 features for it, and measured no gain at all: the model knew it already through

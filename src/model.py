@@ -60,6 +60,10 @@ class SalesModel:
         Train on `log1p(Sales)` and undo the logarithm when predicting. This
         is the right choice for RMSPE and it is the default. Set it to `False`
         only to show what the logarithm is worth.
+    fixed_rounds:
+        Use this number of trees and skip the inner window. The count barely
+        moves with the seed, so when only the seed changes we can take the
+        `best_rounds_` of the first fit and save the inner fit.
     """
 
     def __init__(
@@ -69,12 +73,14 @@ class SalesModel:
         early_stopping_rounds: int = 50,
         inner_valid_days: int = INNER_VALID_DAYS,
         log_target: bool = True,
+        fixed_rounds: int | None = None,
     ) -> None:
         self.params = dict(DEFAULT_PARAMS if params is None else params)
         self.num_boost_round = num_boost_round
         self.early_stopping_rounds = early_stopping_rounds
         self.inner_valid_days = inner_valid_days
         self.log_target = log_target
+        self.fixed_rounds = fixed_rounds
         self.booster_: xgb.Booster | None = None
         self.feature_names_: list[str] = []
         self.best_rounds_: int | None = None
@@ -109,16 +115,20 @@ class SalesModel:
                 f"inner_valid_days={self.inner_valid_days}."
             )
 
-        # Step one: how many trees do we need?
-        watch = xgb.train(
-            self.params,
-            self._matrix(inner_train, target_col),
-            num_boost_round=self.num_boost_round,
-            evals=[(self._matrix(inner_valid, target_col), "inner_valid")],
-            early_stopping_rounds=self.early_stopping_rounds,
-            verbose_eval=False,
-        )
-        self.best_rounds_ = watch.best_iteration + 1
+        # Step one: how many trees do we need? Skipped when the caller
+        # already knows the count from an earlier seed.
+        if self.fixed_rounds is not None:
+            self.best_rounds_ = self.fixed_rounds
+        else:
+            watch = xgb.train(
+                self.params,
+                self._matrix(inner_train, target_col),
+                num_boost_round=self.num_boost_round,
+                evals=[(self._matrix(inner_valid, target_col), "inner_valid")],
+                early_stopping_rounds=self.early_stopping_rounds,
+                verbose_eval=False,
+            )
+            self.best_rounds_ = watch.best_iteration + 1
 
         # Step two: train the real model on everything, with that count.
         self.booster_ = xgb.train(
