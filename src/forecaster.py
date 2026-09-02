@@ -36,20 +36,25 @@ import pickle
 import platform
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 
 from src.data_loader import DataLoader
-from src.features import FeatureBuilder, build_closure_calendar
+from src.features import (FeatureBuilder, build_closure_calendar,
+                          _HOLIDAY_HORIZON, _CLOSURE_WINDOW)
 from src.metrics import rmspe
 from src.model import SalesModel, DEFAULT_PARAMS
 from src.segments import StoreSegmenter
 
 # The columns of the calendar that the closed-day family needs.
 CALENDAR_COLUMNS = ["Store", "Date", "Open", "StateHoliday"]
+
+# How far back the closed-day columns look. Beyond this, the past does not
+# change any feature of a day we predict, so `predict` leaves it out.
+CONTEXT_DAYS = max(_HOLIDAY_HORIZON, _CLOSURE_WINDOW)
 
 
 class Forecaster:
@@ -143,11 +148,15 @@ class Forecaster:
             raise RuntimeError("Forecaster must be fitted before predict().")
         plan = (rows if planned is None else planned).select(CALENDAR_COLUMNS)
         stores = rows["Store"].unique().to_list()
+        first_day = min(rows["Date"].min(), plan["Date"].min())
 
         # The known calendar, extended with the plan. Where both have a day,
-        # the plan wins.
+        # the plan wins. Only the days close enough to matter are kept.
+        known = self.calendar_.filter(
+            pl.col("Store").is_in(stores)
+            & (pl.col("Date") >= first_day - timedelta(days=CONTEXT_DAYS)))
         calendar = (
-            pl.concat([self.calendar_.filter(pl.col("Store").is_in(stores)), plan])
+            pl.concat([known, plan])
             .unique(subset=["Store", "Date"], keep="last")
             .sort(["Store", "Date"])
         )

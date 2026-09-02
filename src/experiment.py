@@ -19,7 +19,7 @@ from typing import Callable
 import polars as pl
 
 from src.metrics import rmspe
-from src.validation import Fold, RollingOriginSplit
+from src.validation import RollingOriginSplit
 
 # A function that trains on the rows of one fold and returns the validation
 # rows with a `prediction` column added.
@@ -78,13 +78,6 @@ def run_cv(
         )
 
     return pl.DataFrame(rows), scored
-
-
-def summarise(results: pl.DataFrame, name: str = "model") -> str:
-    """Return one readable line with the score of every fold and the mean."""
-    per_fold = "  ".join(f"f{r['fold']}={r['rmspe']:.4f}" for r in results.iter_rows(named=True))
-    mean = results["rmspe"].mean()
-    return f"{name:<22} {per_fold}   mean={mean:.4f}"
 
 
 def compare(named_results: dict[str, pl.DataFrame]) -> pl.DataFrame:

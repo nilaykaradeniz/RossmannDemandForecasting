@@ -205,17 +205,17 @@ def _closure_columns(is_open: np.ndarray, is_holiday: np.ndarray,
     open_tomorrow[:-1] = is_open[1:]
 
     # How many of the next seven days is the shop closed, and how many of the
-    # last seven? A running sum makes this one subtraction per day.
+    # last seven? A running sum makes this one subtraction per day. The days
+    # too close to either edge of the calendar keep the unknown value.
     closed = (~is_open).astype(np.int64)
     total = np.concatenate([[0], np.cumsum(closed)])
+    w = _CLOSURE_WINDOW
 
     closed_next = np.full(n_days, _UNKNOWN, dtype=np.int64)
     closed_last = np.full(n_days, _UNKNOWN, dtype=np.int64)
-    for i in range(n_days):
-        if i + _CLOSURE_WINDOW < n_days:
-            closed_next[i] = total[i + 1 + _CLOSURE_WINDOW] - total[i + 1]
-        if i - _CLOSURE_WINDOW >= 0:
-            closed_last[i] = total[i] - total[i - _CLOSURE_WINDOW]
+    if n_days > w:
+        closed_next[:n_days - w] = total[w + 1:n_days + 1] - total[1:n_days - w + 1]
+        closed_last[w:] = total[w:n_days] - total[:n_days - w]
 
     holidays = np.flatnonzero(is_holiday)
     to_next = np.full(n_days, _HOLIDAY_HORIZON, dtype=np.int64)
@@ -304,7 +304,7 @@ def build_reopening_calendar(calendar: pl.DataFrame) -> pl.DataFrame:
 class FeatureBuilder:
     """Build the feature matrix, and learn the store statistics from train only.
 
-    Call `fit(train)` and then `transform(df)`, or call `fit_transform(train)`.
+    Call `fit(train)` and then `transform(df)`.
     After the fit, `feature_names_` holds the columns that form the model
     matrix `X`. The returned DataFrame also keeps the original columns (Store,
     Date, Sales and so on), so that we can measure the error and look at it
@@ -451,10 +451,6 @@ class FeatureBuilder:
             raise RuntimeError("FeatureBuilder must be fitted before transform().")
         return self._build(df)
 
-    def fit_transform(self, train: pl.DataFrame) -> pl.DataFrame:
-        """A short way to call `fit(train)` and then `transform(train)`."""
-        return self.fit(train).transform(train)
-
     # -------------------------------------------------------------- internal
     def _collect_feature_names(self) -> list[str]:
         """The full list of columns that make up `X`, in a fixed order."""
@@ -552,11 +548,16 @@ class FeatureBuilder:
         if not self.with_easter:
             return df
         years = df["Date"].dt.year().unique().to_list()
-        easter = {year: easter_sunday(year) for year in years}
-        distance = [(d - easter[d.year]).days for d in df["Date"].to_list()]
-        return df.with_columns(
-            pl.Series("days_to_easter", distance, dtype=pl.Int32)
-            .clip(-_EASTER_WINDOW, _EASTER_WINDOW)
+        easter = pl.DataFrame({"_year": years,
+                               "_easter": [easter_sunday(y) for y in years]})
+        return (
+            df.with_columns(pl.col("Date").dt.year().alias("_year"))
+            .join(easter, on="_year", how="left")
+            .with_columns(
+                (pl.col("Date") - pl.col("_easter")).dt.total_days()
+                .clip(-_EASTER_WINDOW, _EASTER_WINDOW)
+                .cast(pl.Int32).alias("days_to_easter"))
+            .drop(["_year", "_easter"])
         )
 
     def _join_closure(self, df: pl.DataFrame) -> pl.DataFrame:

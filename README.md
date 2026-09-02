@@ -288,7 +288,7 @@ each store sits at a median of 1.002 times its recent past. The saved model
 also scores a single new row, with one lesson worth knowing: the row must
 come with the opening plan of the days around it, because the closed-day
 columns need to know whether tomorrow is open. Alone, store 1 on 20 August
-is predicted at 1,485; with its plan, at 4,496.
+is predicted at 5,395; with its plan, at 4,496.
 
 The notebook ends with what a company adds after this point - monitoring,
 scheduled retraining, a model registry, serving - and why none of it is

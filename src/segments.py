@@ -177,11 +177,11 @@ class StoreSegmenter:
                              np.linspace(0, 1, bins + 1)[1:-1])
             for col, bins in zip(CELL_COLS, CELL_BINS)
         }
+        z = self._standardise(long_enough)
         cell_id = self._cell_ids(long_enough)
-        cell_id = self._merge_small_cells(cell_id, self._standardise(long_enough))
+        cell_id = self._merge_small_cells(cell_id, z)
 
         # Step 2: describe every cell by its lift, then join similar cells.
-        z = self._standardise(long_enough)
         cells = sorted(set(cell_id))
         centres = np.vstack([z[cell_id == c].mean(axis=0) for c in cells])
         n_clusters = min(self.n_segments, len(cells))
@@ -249,9 +249,6 @@ class StoreSegmenter:
         return df.join(self.assignment_, on="Store", how="left").with_columns(
             pl.col("segment").fill_null(self.default_segment_)
         )
-
-    def fit_transform(self, train: pl.DataFrame) -> pl.DataFrame:
-        return self.fit(train).transform(train)
 
     # -------------------------------------------------------------- internal
     def _standardise(self, profiles: pl.DataFrame) -> np.ndarray:
