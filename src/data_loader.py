@@ -58,6 +58,26 @@ class DataLoader:
         df = self._clean(df, drop_closed=drop_closed)
         return df
 
+    def load_rows(self, path: str | Path) -> pl.DataFrame:
+        """Read rows to predict, in the shape of `test.csv`, with store facts.
+
+        The file needs `Store`, `Date`, `Open`, `Promo`, `StateHoliday` and
+        `SchoolHoliday`. `DayOfWeek` is filled from the date when it is
+        missing, and a missing `Open` counts as open, which is the rule of
+        the competition. The closed days are kept: for them we predict zero.
+        """
+        rows = pl.read_csv(
+            Path(path),
+            try_parse_dates=True,
+            schema_overrides={"StateHoliday": pl.Utf8},
+        )
+        if "DayOfWeek" not in rows.columns:
+            rows = rows.with_columns(pl.col("Date").dt.weekday().alias("DayOfWeek"))
+        rows = rows.with_columns(pl.col("Open").fill_null(1))
+        rows = rows.join(self._read_store(), on="Store", how="left")
+        ints = [c for c in _INT_COLUMNS if c in rows.columns]
+        return rows.with_columns(pl.col(ints).cast(pl.Int64)).sort(["Store", "Date"])
+
     def _read_train(self) -> pl.DataFrame:
         """Read `train.csv`, with real dates and `StateHoliday` as text.
 

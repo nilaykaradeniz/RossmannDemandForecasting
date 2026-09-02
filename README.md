@@ -22,6 +22,10 @@ people should work on each day.
   made the score worse. Every gain came from the data and the features.
 - **No leakage.** The model uses only what the company knows six weeks ahead:
   the date, the store, the planned promotions and the planned opening days.
+- **The model ships.** The final model is trained once, saved with a model
+  card, and used from a file to forecast the test period and to score single
+  new rows. A check shows that the saved file gives the same score as the
+  notebooks.
 
 ## The problem
 
@@ -246,6 +250,48 @@ under-predicts by one, and the next six weeks want a different factor than the
 six weeks before them. Even the best possible factor, learned on the scored
 rows themselves, would gain only 0.0012.
 
+## From the experiment to the forecast
+
+Notebook `09_forecast.ipynb` closes the project. It starts with the road
+that led here - the order of the steps and why each came where it did, what a
+backtest is, and the four jobs a hidden window does - and then it does the
+work that the other notebooks left out.
+
+**The saved file gives the number of the notebooks.** The final model lives
+in `src/forecaster.py`: one object that holds the fitted store statistics,
+the store groups, the four models and the calendar of opening days, and that
+can be saved and loaded. Trained on the days before the last validation
+window, saved, loaded and asked to predict that window, it scores 0.1083
+against 0.1102 in notebook 06. The production path and the experiment are
+the same code.
+
+**The model has learned, not memorised.** On the days it trained on the
+model scores 0.0895, on the hidden window 0.1083, and the baseline on that
+window is 0.1449. The gap between training and hidden days is small, and both
+are far below the baseline. The number of trees is chosen inside every fit by
+early stopping, which is the main guard against memorising.
+
+**Leakage, shown and not only claimed.** Every one of the 31 features is
+listed with the place it comes from: the date, the facts about the store, the
+plans of the company and the state, the opening plan, and statistics learned
+from the training past. Then the experiment notebook 01 refused: with the
+`Customers` column added, the hidden window scores 0.0620 instead of 0.1083.
+That is what a leak looks like - a score no real forecast could reach.
+
+**The forecast.** The final model learns from every day up to 31 July 2015
+and scores the 41,088 rows of `test.csv`. The competition never published the
+answers, so the forecast is checked for shape instead: closed days are zero,
+the mean per weekday matches the last six weeks of training, and the level of
+each store sits at a median of 1.002 times its recent past. The saved model
+also scores a single new row, with one lesson worth knowing: the row must
+come with the opening plan of the days around it, because the closed-day
+columns need to know whether tomorrow is open. Alone, store 1 on 20 August
+is predicted at 1,485; with its plan, at 4,496.
+
+The notebook ends with what a company adds after this point - monitoring,
+scheduled retraining, a model registry, serving - and why none of it is
+needed here.
+
 ## Project structure
 
 ```
@@ -259,6 +305,7 @@ notebooks/
   06_features.ipynb   the closed days and Easter enter the model
   07_reopening_and_month.ipynb  the last two ideas of the list, tested and rejected
   08_tuning_and_calibration.ipynb  the settings of the model, and the correction for the logarithm
+  09_forecast.ipynb   the road from experiment to forecast, the final model, and the test predictions
 src/
   data_loader.py      reads the files, joins them, cleans them
   features.py         builds the features for the model
@@ -267,7 +314,10 @@ src/
   model.py            XGBoost on the logarithm of the sales
   experiment.py       runs one approach on every fold and collects the scores
   segments.py         groups the stores by the way they react
-requirements.txt      the Python packages you need
+  forecaster.py       the final model: train once, save, score new rows
+models/               the saved model and its card (written by the fit command, not shared)
+requirements.txt      the Python packages you need, with their versions
+LICENSE               MIT
 ```
 
 The notebooks tell the story in order, and each one ends with its key
@@ -319,6 +369,13 @@ keeps the fitting inside the fold where it belongs.
 store by ratios, such as how much a promotion helps it, so that the groups
 follow the behaviour of a store and not its size.
 
+`src/forecaster.py` is the model that stays. It holds every fitted part - the
+store statistics, the groups, the four models - and the calendar of opening
+days, in one object that can be saved and loaded. It can be used from Python
+or from the command line, and the file it writes comes with a small JSON card:
+the training period, the tree counts, the code version and the package
+versions.
+
 ## What is not in this project
 
 Some things were left out on purpose.
@@ -346,6 +403,14 @@ Some things were left out on purpose.
 3. Unzip the files and put `train.csv`, `store.csv` and `test.csv` into the
    `data/` folder.
 4. Open the notebooks in `notebooks/` and run them from top to bottom.
+5. To train the final model and score a file without a notebook:
+   ```
+   python -m src.forecaster fit
+   python -m src.forecaster predict data/test.csv --out data/predictions_test.csv
+   ```
+   The first command writes `models/forecaster.pkl` with its model card. The
+   second reads any file in the shape of `test.csv` and writes it back with a
+   `prediction` column.
 
 The notebooks are saved with their outputs, so you can read them without
 running anything. If you do run them, the ones that train models take between

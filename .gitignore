@@ -24,3 +24,6 @@ Thumbs.db
 
 # Stray Windows/PowerShell caches
 Microsoft/
+
+# Trained model files - rebuilt with `python -m src.forecaster fit`
+models/

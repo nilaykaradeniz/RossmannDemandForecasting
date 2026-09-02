@@ -377,6 +377,23 @@ class FeatureBuilder:
                 "that already holds the days_since_reopening column."
             )
 
+    def set_calendar(self, calendar: pl.DataFrame) -> "FeatureBuilder":
+        """Replace the closed-day table, for example to cover future days.
+
+        At prediction time the calendar must reach the days we predict, and
+        their neighbours: `open_tomorrow` on the last training day needs the
+        first forecast day. Nothing learned changes here, because the
+        calendar is reference data. Pass the daily table with the closed
+        days kept, or a table that `build_closure_calendar` has produced.
+        """
+        if self._closure_ is None:
+            raise RuntimeError("This builder was fitted without a calendar.")
+        if set(CLOSURE_COLUMNS).issubset(calendar.columns):
+            self._closure_ = calendar
+        else:
+            self._closure_ = build_closure_calendar(calendar)
+        return self
+
     # ------------------------------------------------------------------ fit
     def fit(self, train: pl.DataFrame) -> "FeatureBuilder":
         """Learn the store statistics and the fill values from `train` only."""
