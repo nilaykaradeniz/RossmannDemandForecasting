@@ -19,8 +19,10 @@ from typing import Iterator
 
 import polars as pl
 
-# Six weeks. This is the length of the competition test period, so our
-# validation windows have the same length.
+# Six weeks. The competition asks for a six-week forecast, so our validation
+# windows have that length. The test file itself runs 48 days, 1 August to
+# 17 September 2015. The model has no memory of the last days, so the extra
+# six days are scored like any other day.
 HORIZON_DAYS = 42
 
 

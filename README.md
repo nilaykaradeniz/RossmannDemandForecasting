@@ -68,7 +68,9 @@ The competition asks for six weeks that we cannot see, so our validation
 windows are six weeks long too. We build four of them, one after the other,
 going back in time from July 2015. Each window trains on every day before it
 starts. A random split would let the model see days that come after the days
-it predicts, and the score would be far too good.
+it predicts, and the score would be far too good. The test file itself runs
+48 days, not 42; the model has no memory of the last days, so the extra six
+days are scored like any other day.
 
 The four windows are not equally hard. The two spring windows contain carnival
 and Easter, and their error is larger. This is why we use four windows and
@@ -175,6 +177,14 @@ with one seed. The short answers:
   learns across the stores beats a model per store, and it takes the
   promotion plan and the opening plan as inputs, which a classical series
   model cannot.
+- **Why six weeks?** Because the competition asked for six weeks. A company
+  would start from the decision the forecast serves, and each decision has
+  its own horizon: the lead time of an order is one or two weeks, a staff
+  roster is published two to four weeks ahead, a budget looks at months.
+  The backtest would follow the rhythm of that decision, with a new cut
+  every week and many windows instead of four, and the error would be
+  reported by week ahead. The likely end is two models: a short one with
+  lags for the orders, and this one for the plan.
 - **Why the logarithm, and not an objective closer to RMSPE?** The exact
   objective, raw sales with the weight `1 / sales squared`, scores 0.1145
   against 0.1083 for the logarithm. The weights hand the trees to the small
